@@ -18,7 +18,6 @@ import (
 	"github.com/ava-labs/coreth/sync/client/stats"
 
 	"github.com/ava-labs/avalanchego/codec"
-	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/version"
 
 	"github.com/ava-labs/coreth/core/types"
@@ -38,7 +37,11 @@ const (
 )
 
 var (
-	StateSyncVersion          = version.NewDefaultApplication(constants.PlatformName, 1, 7, 13)
+	StateSyncVersion = &version.Application{
+		Major: 1,
+		Minor: 7,
+		Patch: 13,
+	}
 	errEmptyResponse          = errors.New("empty response")
 	errTooManyBlocks          = errors.New("response contains more blocks than requested")
 	errHashMismatch           = errors.New("hash does not match expected value")

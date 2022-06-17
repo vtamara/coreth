@@ -41,7 +41,7 @@ type Network interface {
 	// node version greater than or equal to minVersion.
 	// Returns the ID of the chosen peer, and an error if the request could not
 	// be sent to a peer with the desired [minVersion].
-	RequestAny(minVersion version.Application, message []byte, handler message.ResponseHandler) (ids.NodeID, error)
+	RequestAny(minVersion *version.Application, message []byte, handler message.ResponseHandler) (ids.NodeID, error)
 
 	// Request sends message to given nodeID, notifying handler when there's a response or timeout
 	Request(nodeID ids.NodeID, message []byte, handler message.ResponseHandler) error
@@ -103,7 +103,7 @@ func NewNetwork(appSender common.AppSender, codec codec.Manager, self ids.NodeID
 // the request will be sent to any peer regardless of their version.
 // Returns the ID of the chosen peer, and an error if the request could not
 // be sent to a peer with the desired [minVersion].
-func (n *network) RequestAny(minVersion version.Application, request []byte, handler message.ResponseHandler) (ids.NodeID, error) {
+func (n *network) RequestAny(minVersion *version.Application, request []byte, handler message.ResponseHandler) (ids.NodeID, error) {
 	// Take a slot from total [activeRequests] and block until a slot becomes available.
 	if err := n.activeRequests.Acquire(context.Background(), 1); err != nil {
 		return ids.EmptyNodeID, errAcquiringSemaphore
@@ -293,7 +293,7 @@ func (n *network) AppGossip(nodeID ids.NodeID, gossipBytes []byte) error {
 }
 
 // Connected adds the given nodeID to the peer list so that it can receive messages
-func (n *network) Connected(nodeID ids.NodeID, nodeVersion version.Application) error {
+func (n *network) Connected(nodeID ids.NodeID, nodeVersion *version.Application) error {
 	log.Debug("adding new peer", "nodeID", nodeID)
 
 	n.lock.Lock()
