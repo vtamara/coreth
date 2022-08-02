@@ -2315,10 +2315,9 @@ func TestUncleBlock(t *testing.T) {
 		blkDEthBlock.ExtData(),
 		false,
 	)
-	uncleBlock := &Block{
-		vm:       vm2,
-		ethBlock: uncleEthBlock,
-		id:       ids.ID(uncleEthBlock.Hash()),
+	uncleBlock, err := vm2.newBlock(uncleEthBlock)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := uncleBlock.Verify(); !errors.Is(err, errUnclesUnsupported) {
 		t.Fatalf("VM2 should have failed with %q but got %q", errUnclesUnsupported, err.Error())
@@ -2378,10 +2377,9 @@ func TestEmptyBlock(t *testing.T) {
 		t.Fatalf("emptyEthBlock should not have any extra data")
 	}
 
-	emptyBlock := &Block{
-		vm:       vm,
-		ethBlock: emptyEthBlock,
-		id:       ids.ID(emptyEthBlock.Hash()),
+	emptyBlock, err := vm.newBlock(emptyEthBlock)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := vm.ParseBlock(emptyBlock.Bytes()); !errors.Is(err, errEmptyBlock) {
@@ -2655,11 +2653,9 @@ func TestFutureBlock(t *testing.T) {
 		false,
 	)
 
-	futureBlock := &Block{
-		vm:        vm,
-		ethBlock:  modifiedBlock,
-		id:        ids.ID(modifiedBlock.Hash()),
-		atomicTxs: internalBlkA.atomicTxs,
+	futureBlock, err := vm.newBlock(modifiedBlock)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	if err := futureBlock.Verify(); err == nil {
