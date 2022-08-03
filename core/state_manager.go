@@ -31,7 +31,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/ava-labs/coreth/core/types"
 	"github.com/ava-labs/coreth/ethdb"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -57,10 +56,16 @@ const (
 	flushWindow = 768
 )
 
+type BlockContext interface {
+	Root() common.Hash // returns a root that corresponds to the trie being managed
+	NumberU64() uint64 // returns the height of the block (used to determine when to persist to disk)
+	Hash() common.Hash // returns a hash that can be logged for informational purposes
+}
+
 type TrieWriter interface {
-	InsertTrie(block *types.Block) error // Insert reference to trie [root]
-	AcceptTrie(block *types.Block) error // Mark [root] as part of an accepted block
-	RejectTrie(block *types.Block) error // Notify TrieWriter that the block containing [root] has been rejected
+	InsertTrie(block BlockContext) error // Insert reference to trie [root]
+	AcceptTrie(block BlockContext) error // Mark [root] as part of an accepted block
+	RejectTrie(block BlockContext) error // Notify TrieWriter that the block containing [root] has been rejected
 	Shutdown() error
 }
 
@@ -95,20 +100,20 @@ type noPruningTrieWriter struct {
 	TrieDB
 }
 
-func (np *noPruningTrieWriter) InsertTrie(block *types.Block) error {
+func (np *noPruningTrieWriter) InsertTrie(block BlockContext) error {
 	// We don't attempt to [Cap] here because we should never have
 	// a significant amount of [TrieDB.Dirties] (we commit each block).
 	np.TrieDB.Reference(block.Root(), common.Hash{})
 	return nil
 }
 
-func (np *noPruningTrieWriter) AcceptTrie(block *types.Block) error {
+func (np *noPruningTrieWriter) AcceptTrie(block BlockContext) error {
 	// We don't need to call [Dereference] on the block root at the end of this
 	// function because it is removed from the [TrieDB.Dirties] map in [Commit].
 	return np.TrieDB.Commit(block.Root(), false, nil)
 }
 
-func (np *noPruningTrieWriter) RejectTrie(block *types.Block) error {
+func (np *noPruningTrieWriter) RejectTrie(block BlockContext) error {
 	np.TrieDB.Dereference(block.Root())
 	return nil
 }
@@ -126,7 +131,7 @@ type cappedMemoryTrieWriter struct {
 	tipBuffer *BoundedBuffer
 }
 
-func (cm *cappedMemoryTrieWriter) InsertTrie(block *types.Block) error {
+func (cm *cappedMemoryTrieWriter) InsertTrie(block BlockContext) error {
 	cm.TrieDB.Reference(block.Root(), common.Hash{})
 
 	// The use of [Cap] in [InsertTrie] prevents exceeding the configured memory
@@ -142,7 +147,7 @@ func (cm *cappedMemoryTrieWriter) InsertTrie(block *types.Block) error {
 	return nil
 }
 
-func (cm *cappedMemoryTrieWriter) AcceptTrie(block *types.Block) error {
+func (cm *cappedMemoryTrieWriter) AcceptTrie(block BlockContext) error {
 	root := block.Root()
 
 	// Attempt to dereference roots at least [tipBufferSize] old (so queries at tip
@@ -188,7 +193,7 @@ func (cm *cappedMemoryTrieWriter) AcceptTrie(block *types.Block) error {
 	return nil
 }
 
-func (cm *cappedMemoryTrieWriter) RejectTrie(block *types.Block) error {
+func (cm *cappedMemoryTrieWriter) RejectTrie(block BlockContext) error {
 	cm.TrieDB.Dereference(block.Root())
 	return nil
 }
