@@ -61,7 +61,10 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	// next trie.
 	for i, checkpoint := range checkpoints {
 		// Create syncer targeting the current [syncTrie].
-		syncer := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+		syncer, err := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+		if err != nil {
+			t.Fatal(err)
+		}
 		mockClient.GetLeafsIntercept = func(_ message.LeafsRequest, leafsResponse message.LeafsResponse) (message.LeafsResponse, error) {
 			// If this request exceeds the desired number of leaves, intercept the request with an error
 			if numLeaves+len(leafsResponse.Keys) > checkpoint.leafCutoff {
@@ -85,7 +88,10 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	}
 
 	// Create syncer targeting the current [targetRoot].
-	syncer := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+	syncer, err := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Update intercept to only count the leaves
 	mockClient.GetLeafsIntercept = func(_ message.LeafsRequest, leafsResponse message.LeafsResponse) (message.LeafsResponse, error) {

@@ -25,9 +25,10 @@ var (
 // is responsible for orchestrating the sync while atomicSyncer is responsible for maintaining
 // the state of progress and writing the actual atomic trie to the trieDB.
 type atomicSyncer struct {
-	atomicTrie   *atomicTrie
-	targetRoot   common.Hash
-	targetHeight uint64
+	atomicTrie         *atomicTrie
+	atomicTrieSnapshot AtomicTrieSnapshot // used to update the atomic trie
+	targetRoot         common.Hash
+	targetHeight       uint64
 
 	// syncer is used to sync leaves from the network.
 	syncer *syncclient.CallbackLeafSyncer
@@ -49,21 +50,26 @@ func addZeroes(height uint64) []byte {
 	return packer.Bytes
 }
 
-func newAtomicSyncer(client syncclient.LeafClient, atomicTrie *atomicTrie, targetRoot common.Hash, targetHeight uint64) *atomicSyncer {
-	_, lastCommit := atomicTrie.LastCommitted()
+func newAtomicSyncer(client syncclient.LeafClient, atomicTrie *atomicTrie, targetRoot common.Hash, targetHeight uint64) (*atomicSyncer, error) {
+	lastCommittedRoot, lastCommit := atomicTrie.LastCommitted()
+	atomicTrieSnapshot, err := atomicTrie.OpenTrie(lastCommittedRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	atomicSyncer := &atomicSyncer{
-		atomicTrie:   atomicTrie,
-		targetRoot:   targetRoot,
-		targetHeight: targetHeight,
-		nextCommit:   lastCommit + atomicTrie.commitHeightInterval,
-		nextHeight:   lastCommit + 1,
+		atomicTrie:         atomicTrie,
+		atomicTrieSnapshot: atomicTrieSnapshot,
+		targetRoot:         targetRoot,
+		targetHeight:       targetHeight,
+		nextCommit:         lastCommit + atomicTrie.commitHeightInterval,
+		nextHeight:         lastCommit + 1,
 	}
 	tasks := make(chan syncclient.LeafSyncTask, 1)
 	tasks <- &atomicSyncerLeafTask{atomicSyncer: atomicSyncer}
 	close(tasks)
 	atomicSyncer.syncer = syncclient.NewCallbackLeafSyncer(client, tasks)
-	return atomicSyncer
+	return atomicSyncer, nil
 }
 
 // Start begins syncing the target atomic root.
@@ -83,7 +89,11 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 
 		// Commit the trie and update [nextCommit] if we are crossing a commit interval
 		if height > s.nextCommit {
-			if err := s.atomicTrie.commit(s.nextCommit); err != nil {
+			root, err := s.atomicTrieSnapshot.Commit()
+			if err != nil {
+				return err
+			}
+			if err := s.atomicTrie.commit(s.nextCommit, root); err != nil {
 				return err
 			}
 			if err := s.atomicTrie.db.Commit(); err != nil {
@@ -91,8 +101,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 			}
 			s.nextCommit += s.atomicTrie.commitHeightInterval
 		}
-
-		if err := s.atomicTrie.trie.TryUpdate(key, values[i]); err != nil {
+		if err := s.atomicTrieSnapshot.TryUpdate(key, values[i]); err != nil {
 			return err
 		}
 	}
@@ -103,7 +112,11 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 // commit the trie to disk and perform the final checks that we synced the target root correctly.
 func (s *atomicSyncer) onFinish() error {
 	// commit the trie on finish
-	if err := s.atomicTrie.commit(s.targetHeight); err != nil {
+	root, err := s.atomicTrieSnapshot.Commit()
+	if err != nil {
+		return err
+	}
+	if err := s.atomicTrie.commit(s.targetHeight, root); err != nil {
 		return err
 	}
 	if err := s.atomicTrie.db.Commit(); err != nil {
@@ -112,10 +125,11 @@ func (s *atomicSyncer) onFinish() error {
 
 	// the root of the trie should always match the targetRoot  since we already verified the proofs,
 	// here we check the root mainly for correctness of the atomicTrie's pointers and it should never fail.
-	root, _ := s.atomicTrie.LastCommitted()
 	if s.targetRoot != root {
 		return fmt.Errorf("synced root (%s) does not match expected (%s) for atomic trie ", root, s.targetRoot)
 	}
+	// set the atomic trie's initializedRoot after sync has completed
+	s.atomicTrie.initializedRoot = root
 	return nil
 }
 

@@ -254,6 +254,8 @@ type VM struct {
 	atomicTxRepository AtomicTxRepository
 	// [atomicTrie] maintains a merkle forest of [height]=>[atomic txs].
 	atomicTrie AtomicTrie
+	// [atomicBackend] abstracts verification and processing of atomic transactions
+	atomicBackend AtomicBackend
 
 	builder *blockBuilder
 
@@ -525,6 +527,12 @@ func (vm *VM) Initialize(
 		return fmt.Errorf("failed to create atomic trie: %w", err)
 	}
 
+	chainLastAccepted := vm.blockChain.LastAcceptedBlock().Hash()
+	vm.atomicBackend, err = NewAtomicBackend(vm.codec, vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, vm.config.CommitInterval, chainLastAccepted)
+	if err != nil {
+		return fmt.Errorf("failed to create atomic backend: %w", err)
+	}
+
 	go vm.ctx.Log.RecoverAndPanic(vm.startContinuousProfiler)
 
 	// The Codec explicitly registers the types it requires from the secp256k1fx
@@ -640,6 +648,7 @@ func (vm *VM) initializeStateSyncClient(lastAcceptedHeight uint64) error {
 		acceptedBlockDB:    vm.acceptedBlockDB,
 		db:                 vm.db,
 		atomicTrie:         vm.atomicTrie,
+		atomicBackend:      vm.atomicBackend,
 		toEngine:           vm.toEngine,
 	})
 

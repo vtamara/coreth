@@ -52,6 +52,7 @@ type stateSyncClientConfig struct {
 	acceptedBlockDB database.Database
 	db              *versiondb.Database
 	atomicTrie      AtomicTrie
+	atomicBackend   AtomicBackend
 
 	client syncclient.Client
 
@@ -151,11 +152,12 @@ func (client *stateSyncerClient) stateSync() error {
 
 	// Sync the EVM trie and then the atomic trie. These steps could be done
 	// in parallel or in the opposite order. Keeping them serial for simplicity for now.
-	if err := client.syncStateTrie(ctx); err != nil {
+	// TODO: revert
+	if err := client.syncAtomicTrie(ctx); err != nil {
 		return err
 	}
 
-	return client.syncAtomicTrie(ctx)
+	return client.syncStateTrie(ctx)
 }
 
 // acceptSyncSummary returns true if sync will be performed and launches the state sync process
@@ -274,11 +276,14 @@ func (client *stateSyncerClient) syncBlocks(ctx context.Context, fromHash common
 
 func (client *stateSyncerClient) syncAtomicTrie(ctx context.Context) error {
 	log.Info("atomic tx: sync starting", "root", client.syncSummary.AtomicRoot)
-	atomicSyncer := client.atomicTrie.Syncer(client.client, client.syncSummary.AtomicRoot, client.syncSummary.BlockNumber)
+	atomicSyncer, err := client.atomicTrie.Syncer(client.client, client.syncSummary.AtomicRoot, client.syncSummary.BlockNumber)
+	if err != nil {
+		return err
+	}
 	if err := atomicSyncer.Start(ctx); err != nil {
 		return err
 	}
-	err := <-atomicSyncer.Done()
+	err = <-atomicSyncer.Done()
 	log.Info("atomic tx: sync finished", "root", client.syncSummary.AtomicRoot, "err", err)
 	return err
 }
@@ -384,6 +389,7 @@ func (client *stateSyncerClient) updateVMMarkers() error {
 	if err := client.atomicTrie.MarkApplyToSharedMemoryCursor(client.lastAcceptedHeight); err != nil {
 		return err
 	}
+	client.atomicBackend.ResetLastAccepted(client.syncSummary.BlockHash)
 	if err := client.acceptedBlockDB.Put(lastAcceptedKey, client.syncSummary.BlockHash[:]); err != nil {
 		return err
 	}
