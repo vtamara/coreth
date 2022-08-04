@@ -37,9 +37,10 @@ const (
 )
 
 var (
-	_                            AtomicTrie = &atomicTrie{}
-	lastCommittedKey                        = []byte("atomicTrieLastCommittedBlock")
-	appliedSharedMemoryCursorKey            = []byte("atomicTrieLastAppliedToSharedMemory")
+	_                            AtomicTrie         = &atomicTrie{}
+	_                            AtomicTrieSnapshot = &atomicTrieSnapshot{}
+	lastCommittedKey                                = []byte("atomicTrieLastCommittedBlock")
+	appliedSharedMemoryCursorKey                    = []byte("atomicTrieLastAppliedToSharedMemory")
 )
 
 // AtomicTrie maintains an index of atomic operations by blockchainIDs for every block
@@ -103,14 +104,22 @@ type AtomicTrie interface {
 }
 
 // TODO: rename this
+// AtomicTrieSnapshot represents a modifyable atomic trie
 type AtomicTrieSnapshot interface {
+	// UpdateTrie updates the trie to inlude atomicOps for height.
 	UpdateTrie(height uint64, atomicOps map[ids.ID]*atomic.Requests) error
 
+	// TryUpdate updates the underlying trie with the raw key/value bytes.
+	// Used in syncing.
+	TryUpdate(key []byte, val []byte) error
+
+	// Root hashes the changes and generates a root without writing to
+	// the trieDB.
 	Root() common.Hash
 
+	// Commit hashes the changes and generates a root, committing modified
+	// trie nodes to the trieDB.
 	Commit() (common.Hash, error)
-
-	TryUpdate(key []byte, val []byte) error
 }
 
 // AtomicTrieIterator is a stateful iterator that iterates the leafs of an AtomicTrie
@@ -138,7 +147,6 @@ type AtomicTrieIterator interface {
 }
 
 // atomicTrie implements the AtomicTrie interface
-// using the eth trie.Trie implementation
 type atomicTrie struct {
 	commitInterval      uint64              // commit interval, same as commitHeightInterval by default
 	db                  *versiondb.Database // Underlying database
@@ -157,6 +165,7 @@ type atomicTrie struct {
 	tipBuffer           *core.BoundedBuffer
 }
 
+// atomicTrieSnapshot implements the AtomicTrieSnapshot interface
 type atomicTrieSnapshot struct {
 	trie       *trie.Trie
 	atomicTrie *atomicTrie
