@@ -152,12 +152,11 @@ func (client *stateSyncerClient) stateSync() error {
 
 	// Sync the EVM trie and then the atomic trie. These steps could be done
 	// in parallel or in the opposite order. Keeping them serial for simplicity for now.
-	// TODO: revert
-	if err := client.syncAtomicTrie(ctx); err != nil {
+	if err := client.syncStateTrie(ctx); err != nil {
 		return err
 	}
 
-	return client.syncStateTrie(ctx)
+	return client.syncAtomicTrie(ctx)
 }
 
 // acceptSyncSummary returns true if sync will be performed and launches the state sync process
@@ -389,7 +388,7 @@ func (client *stateSyncerClient) updateVMMarkers() error {
 	if err := client.atomicTrie.MarkApplyToSharedMemoryCursor(client.lastAcceptedHeight); err != nil {
 		return err
 	}
-	client.atomicBackend.ResetLastAccepted(client.syncSummary.BlockHash)
+	client.atomicBackend.SetLastAccepted(client.syncSummary.BlockHash)
 	if err := client.acceptedBlockDB.Put(lastAcceptedKey, client.syncSummary.BlockHash[:]); err != nil {
 		return err
 	}

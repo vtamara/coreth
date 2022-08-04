@@ -20,11 +20,8 @@ type AtomicBackend interface {
 	InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (AtomicState, error)
 	CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
 
-	// ResetLastAccepted is used after state-sync to reload the initial
-	// accepted block.
-	ResetLastAccepted(hash common.Hash)
-	// GetLastAccepted returns the last accepted root
-	GetLastAccepted() common.Hash
+	// SetLastAccepted is used after state-sync to reset the last accepted block.
+	SetLastAccepted(lastAcceptedHash common.Hash)
 }
 
 // AtomicState is an abstraction created through AtomicBackend
@@ -42,7 +39,6 @@ type atomicBackend struct {
 	commitInterval uint64
 	memoryCap      common.StorageSize
 
-	lastAcceptedRoot common.Hash
 	lastAcceptedHash common.Hash
 	verifiedRoots    map[common.Hash]common.Hash
 
@@ -72,7 +68,6 @@ func NewAtomicBackend(
 		atomicTrie:       atomicTrie,
 		codec:            codec,
 		lastAcceptedHash: lastAcceptedHash,
-		lastAcceptedRoot: atomicTrie.LastAcceptedRoot(),
 		verifiedRoots:    make(map[common.Hash]common.Hash),
 	}, nil
 }
@@ -80,7 +75,7 @@ func NewAtomicBackend(
 func (a *atomicBackend) getAtomicRootAt(blockHash common.Hash) (common.Hash, error) {
 	// TODO: we can implement this in a few ways.
 	if blockHash == a.lastAcceptedHash {
-		return a.lastAcceptedRoot, nil
+		return a.atomicTrie.LastAcceptedRoot(), nil
 	}
 	if root, ok := a.verifiedRoots[blockHash]; ok {
 		return root, nil
@@ -88,17 +83,10 @@ func (a *atomicBackend) getAtomicRootAt(blockHash common.Hash) (common.Hash, err
 	return common.Hash{}, fmt.Errorf("attempt to access atomic root for an invalid block: %s", blockHash)
 }
 
-// ResetLastAccepted is used after state-sync to reload the initial
-// accepted block.
-// The last accepted atomic root is synced from the atomicTrie.
+// SetLastAccepted is used after state-sync to update the last accepted block hash.
 // TODO: try to remove this
-func (a *atomicBackend) ResetLastAccepted(blockHash common.Hash) {
-	a.lastAcceptedHash = blockHash
-	a.lastAcceptedRoot = a.atomicTrie.LastAcceptedRoot()
-}
-
-func (a *atomicBackend) GetLastAccepted() common.Hash {
-	return a.lastAcceptedRoot
+func (a *atomicBackend) SetLastAccepted(lastAcceptedHash common.Hash) {
+	a.lastAcceptedHash = lastAcceptedHash
 }
 
 func (a *atomicBackend) CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error) {
@@ -192,7 +180,6 @@ func (a *atomicState) Accept() error {
 		return err
 	}
 	a.backend.lastAcceptedHash = a.blockHash
-	a.backend.lastAcceptedRoot = a.atomicRoot
 	delete(a.backend.verifiedRoots, a.blockHash)
 
 	// If this is a bonus block, commit the database without applying atomic ops

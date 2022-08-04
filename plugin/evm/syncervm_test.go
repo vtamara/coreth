@@ -309,7 +309,7 @@ func createSyncServerAndClientVMs(t *testing.T, test syncTest) *syncVMSetup {
 	// fetching a state summary.
 	atomicTrie := serverVM.atomicTrie.(*atomicTrie)
 	atomicTrie.commitInterval = test.syncableInterval
-	assert.NoError(t, atomicTrie.commit(test.syncableInterval, serverVM.atomicBackend.GetLastAccepted()))
+	assert.NoError(t, atomicTrie.commit(test.syncableInterval, serverVM.atomicTrie.LastAcceptedRoot()))
 	assert.NoError(t, serverVM.db.Commit())
 
 	serverSharedMemories := newSharedMemories(serverAtomicMemory, serverVM.ctx.ChainID, serverVM.ctx.XChainID)
