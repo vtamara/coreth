@@ -85,10 +85,6 @@ type AtomicTrie interface {
 	// state of the atomic trie from peers
 	Syncer(client syncclient.LeafClient, targetRoot common.Hash, targetHeight uint64) (Syncer, error)
 
-	// UpdateLastCommitted marks root as the root of the atomic trie that corresponds
-	// to the block accepted at height.
-	UpdateLastCommitted(root common.Hash, height uint64) error
-
 	// LastAcceptedRoot returns the most recent accepted root of the atomic trie,
 	// or the root it was initialized to if no new tries were accepted yet.
 	LastAcceptedRoot() common.Hash
@@ -453,7 +449,7 @@ func (a *atomicTrie) commit(height uint64, root common.Hash) error {
 		return err
 	}
 	a.log.Info("committed atomic trie", "root", root.String(), "height", height)
-	return a.UpdateLastCommitted(root, height)
+	return a.updateLastCommitted(root, height)
 }
 
 func (a *atomicTrieSnapshot) UpdateTrie(height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
@@ -495,9 +491,9 @@ func (a *atomicTrie) LastCommitted() (common.Hash, uint64) {
 	return a.lastCommittedRoot, a.lastCommittedHeight
 }
 
-// UpdateLastCommitted adds [height] -> [root] to the index and marks it as the last committed
+// updateLastCommitted adds [height] -> [root] to the index and marks it as the last committed
 // root/height pair.
-func (a *atomicTrie) UpdateLastCommitted(root common.Hash, height uint64) error {
+func (a *atomicTrie) updateLastCommitted(root common.Hash, height uint64) error {
 	heightBytes := make([]byte, wrappers.LongLen)
 	binary.BigEndian.PutUint64(heightBytes, height)
 

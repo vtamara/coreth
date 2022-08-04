@@ -128,7 +128,7 @@ func (s *atomicSyncer) onFinish() error {
 	if s.targetRoot != root {
 		return fmt.Errorf("synced root (%s) does not match expected (%s) for atomic trie ", root, s.targetRoot)
 	}
-	// set the atomic trie's initializedRoot after sync has completed
+	// set the atomic trie's lastAcceptedRoot after sync has completed
 	s.atomicTrie.lastAcceptedRoot = root
 	return nil
 }
