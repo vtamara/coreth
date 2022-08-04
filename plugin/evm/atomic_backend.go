@@ -11,12 +11,13 @@ import (
 	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/coreth/core"
+	"github.com/ava-labs/coreth/ethdb"
 	"github.com/ava-labs/coreth/trie"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 )
 
-var _ core.BlockContext = &atomicState{}
+const atomicTrieTipBufferSize = 1
 
 // AtomicBackend abstracts the verification and processing
 // of atomic transactions
@@ -43,17 +44,18 @@ type AtomicState interface {
 }
 
 type atomicBackend struct {
-	trieDB     *trie.Database
-	trieWriter core.TrieWriter
+	trieDB         *trie.Database
+	tipBuffer      *core.BoundedBuffer
+	commitInterval uint64
+	memoryCap      common.StorageSize
 
 	lastAcceptedRoot common.Hash
 	lastAcceptedHash common.Hash
 	verifiedRoots    map[common.Hash]common.Hash
 
-	bonusBlocks    map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
-	db             *versiondb.Database // Underlying database
-	sharedMemory   atomic.SharedMemory
-	commitInterval uint64
+	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
+	db           *versiondb.Database // Underlying database
+	sharedMemory atomic.SharedMemory
 
 	codec codec.Manager
 
@@ -69,6 +71,8 @@ func NewAtomicBackend(
 	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, atomicTrie AtomicTrie,
 	commitHeightInterval uint64, lastAcceptedHash common.Hash,
 ) (AtomicBackend, error) {
+
+	trieDB := atomicTrie.TrieDB()
 	return &atomicBackend{
 		db:               db,
 		sharedMemory:     sharedMemory,
@@ -76,10 +80,10 @@ func NewAtomicBackend(
 		repo:             repo,
 		atomicTrie:       atomicTrie,
 		codec:            codec,
-		trieDB:           atomicTrie.TrieDB(),
+		trieDB:           trieDB,
 		lastAcceptedHash: lastAcceptedHash,
 		lastAcceptedRoot: atomicTrie.GetInitializedRoot(),
-		trieWriter:       core.NewTrieWriter(atomicTrie.TrieDB(), core.DefaultCacheConfig),
+		tipBuffer:        core.NewBoundedBuffer(atomicTrieTipBufferSize, trieDB.Dereference),
 		verifiedRoots:    make(map[common.Hash]common.Hash),
 		commitInterval:   commitHeightInterval,
 	}, nil
@@ -152,17 +156,56 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		return nil, err
 	}
 
-	atomicState := &atomicState{
+	if err := a.insertTrie(root); err != nil {
+		return nil, err
+	}
+	a.verifiedRoots[blockHash] = root
+
+	return &atomicState{
 		backend:     a,
 		blockHash:   blockHash,
 		blockHeight: blockHeight,
 		txs:         txs,
 		atomicOps:   atomicOps,
 		atomicRoot:  root,
+	}, nil
+}
+
+func (a *atomicBackend) insertTrie(root common.Hash) error {
+	a.trieDB.Reference(root, common.Hash{})
+
+	// The use of [Cap] in [insertTrie] prevents exceeding the configured memory
+	// limit (and OOM) in case there is a large backlog of processing (unaccepted) blocks.
+	nodes, _ := a.trieDB.Size()
+	if nodes <= a.memoryCap {
+		return nil
 	}
-	a.trieWriter.InsertTrie(atomicState)
-	a.verifiedRoots[blockHash] = root
-	return atomicState, nil
+	if err := a.trieDB.Cap(a.memoryCap - ethdb.IdealBatchSize); err != nil {
+		return fmt.Errorf("failed to cap atomic trie for root %s: %w", root, err)
+	}
+
+	return nil
+}
+
+func (a *atomicBackend) acceptTrie(height uint64, root common.Hash) error {
+	// Attempt to dereference roots at least [tipBufferSize] old
+	//
+	// Note: It is safe to dereference roots that have been committed to disk
+	// (they are no-ops).
+	a.tipBuffer.Insert(root)
+
+	// Commit this root if we have reached the [commitInterval].
+	modCommitInterval := height % a.commitInterval
+	if modCommitInterval == 0 {
+		if err := a.atomicTrie.UpdateLastCommitted(root, height); err != nil {
+			return err
+		}
+		if err := a.trieDB.Commit(root, false, nil); err != nil {
+			return fmt.Errorf("failed to commit atomict trie for root %s at height %d: %w", root, height, err)
+		}
+		log.Info("committed atomic trie", "root", root.String(), "height", height)
+	}
+	return nil
 }
 
 type atomicState struct {
@@ -194,16 +237,12 @@ func (a *atomicState) Accept() error {
 		}
 	}
 
-	if err := a.backend.trieWriter.AcceptTrie(a); err != nil {
+	if err := a.backend.acceptTrie(a.blockHeight, a.atomicRoot); err != nil {
 		return err
 	}
 	a.backend.lastAcceptedHash = a.blockHash
 	a.backend.lastAcceptedRoot = a.atomicRoot
 	delete(a.backend.verifiedRoots, a.blockHash)
-
-	if a.blockHeight%a.backend.commitInterval == 0 {
-		a.backend.atomicTrie.UpdateLastCommitted(a.atomicRoot, a.blockHeight)
-	}
 
 	// If this is a bonus block, commit the database without applying atomic ops
 	// to shared memory.
@@ -222,21 +261,11 @@ func (a *atomicState) Accept() error {
 }
 
 func (a *atomicState) Reject() error {
-	if err := a.backend.trieWriter.RejectTrie(a); err != nil {
-		return err
-	}
+	a.backend.trieDB.Dereference(a.atomicRoot)
 	delete(a.backend.verifiedRoots, a.blockHash)
 	return nil
 }
 
 func (a *atomicState) Root() common.Hash {
 	return a.atomicRoot
-}
-
-func (a *atomicState) Hash() common.Hash {
-	return a.blockHash
-}
-
-func (a *atomicState) NumberU64() uint64 {
-	return a.blockHeight
 }
