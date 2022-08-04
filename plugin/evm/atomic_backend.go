@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/ava-labs/avalanchego/chains/atomic"
-	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ethereum/go-ethereum/common"
@@ -64,14 +63,12 @@ type atomicBackend struct {
 	db           *versiondb.Database // Underlying database
 	sharedMemory atomic.SharedMemory
 
-	codec      codec.Manager
 	repo       AtomicTxRepository
 	atomicTrie AtomicTrie
 }
 
 // NewAtomicBackend creates an AtomicBackend from the specified dependencies
 func NewAtomicBackend(
-	codec codec.Manager,
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
 	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, atomicTrie AtomicTrie,
 	lastAcceptedHash common.Hash,
@@ -82,7 +79,6 @@ func NewAtomicBackend(
 		bonusBlocks:      bonusBlocks,
 		repo:             repo,
 		atomicTrie:       atomicTrie,
-		codec:            codec,
 		lastAcceptedHash: lastAcceptedHash,
 		verifiedRoots:    make(map[common.Hash]common.Hash),
 	}, nil
