@@ -308,7 +308,7 @@ func createSyncServerAndClientVMs(t *testing.T, test syncTest) *syncVMSetup {
 	// creates a commit at the height [syncableInterval]. This is necessary to support
 	// fetching a state summary.
 	atomicTrie := serverVM.atomicTrie.(*atomicTrie)
-	atomicTrie.commitHeightInterval = test.syncableInterval
+	atomicTrie.commitInterval = test.syncableInterval
 	assert.NoError(t, atomicTrie.commit(test.syncableInterval, serverVM.atomicBackend.GetLastAccepted()))
 	assert.NoError(t, serverVM.db.Commit())
 

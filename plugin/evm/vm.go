@@ -499,7 +499,7 @@ func (vm *VM) Initialize(
 	}
 
 	chainLastAccepted := vm.blockChain.LastAcceptedBlock().Hash()
-	vm.atomicBackend, err = NewAtomicBackend(vm.codec, vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, vm.config.CommitInterval, chainLastAccepted)
+	vm.atomicBackend, err = NewAtomicBackend(vm.codec, vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, chainLastAccepted)
 	if err != nil {
 		return fmt.Errorf("failed to create atomic backend: %w", err)
 	}

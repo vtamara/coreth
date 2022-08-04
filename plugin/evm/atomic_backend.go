@@ -10,14 +10,9 @@ import (
 	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/coreth/core"
-	"github.com/ava-labs/coreth/ethdb"
-	"github.com/ava-labs/coreth/trie"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 )
-
-const atomicTrieTipBufferSize = 1
 
 // AtomicBackend abstracts the verification and processing
 // of atomic transactions
@@ -44,8 +39,6 @@ type AtomicState interface {
 }
 
 type atomicBackend struct {
-	trieDB         *trie.Database
-	tipBuffer      *core.BoundedBuffer
 	commitInterval uint64
 	memoryCap      common.StorageSize
 
@@ -69,10 +62,8 @@ func NewAtomicBackend(
 	codec codec.Manager,
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
 	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, atomicTrie AtomicTrie,
-	commitHeightInterval uint64, lastAcceptedHash common.Hash,
+	lastAcceptedHash common.Hash,
 ) (AtomicBackend, error) {
-
-	trieDB := atomicTrie.TrieDB()
 	return &atomicBackend{
 		db:               db,
 		sharedMemory:     sharedMemory,
@@ -80,12 +71,9 @@ func NewAtomicBackend(
 		repo:             repo,
 		atomicTrie:       atomicTrie,
 		codec:            codec,
-		trieDB:           trieDB,
 		lastAcceptedHash: lastAcceptedHash,
-		lastAcceptedRoot: atomicTrie.GetInitializedRoot(),
-		tipBuffer:        core.NewBoundedBuffer(atomicTrieTipBufferSize, trieDB.Dereference),
+		lastAcceptedRoot: atomicTrie.LastAcceptedRoot(),
 		verifiedRoots:    make(map[common.Hash]common.Hash),
-		commitInterval:   commitHeightInterval,
 	}, nil
 }
 
@@ -106,7 +94,7 @@ func (a *atomicBackend) getAtomicRootAt(blockHash common.Hash) (common.Hash, err
 // TODO: try to remove this
 func (a *atomicBackend) ResetLastAccepted(blockHash common.Hash) {
 	a.lastAcceptedHash = blockHash
-	a.lastAcceptedRoot = a.atomicTrie.GetInitializedRoot()
+	a.lastAcceptedRoot = a.atomicTrie.LastAcceptedRoot()
 }
 
 func (a *atomicBackend) GetLastAccepted() common.Hash {
@@ -156,7 +144,7 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		return nil, err
 	}
 
-	if err := a.insertTrie(root); err != nil {
+	if err := a.atomicTrie.InsertTrie(root); err != nil {
 		return nil, err
 	}
 	a.verifiedRoots[blockHash] = root
@@ -169,43 +157,6 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		atomicOps:   atomicOps,
 		atomicRoot:  root,
 	}, nil
-}
-
-func (a *atomicBackend) insertTrie(root common.Hash) error {
-	a.trieDB.Reference(root, common.Hash{})
-
-	// The use of [Cap] in [insertTrie] prevents exceeding the configured memory
-	// limit (and OOM) in case there is a large backlog of processing (unaccepted) blocks.
-	nodes, _ := a.trieDB.Size()
-	if nodes <= a.memoryCap {
-		return nil
-	}
-	if err := a.trieDB.Cap(a.memoryCap - ethdb.IdealBatchSize); err != nil {
-		return fmt.Errorf("failed to cap atomic trie for root %s: %w", root, err)
-	}
-
-	return nil
-}
-
-func (a *atomicBackend) acceptTrie(height uint64, root common.Hash) error {
-	// Attempt to dereference roots at least [tipBufferSize] old
-	//
-	// Note: It is safe to dereference roots that have been committed to disk
-	// (they are no-ops).
-	a.tipBuffer.Insert(root)
-
-	// Commit this root if we have reached the [commitInterval].
-	modCommitInterval := height % a.commitInterval
-	if modCommitInterval == 0 {
-		if err := a.atomicTrie.UpdateLastCommitted(root, height); err != nil {
-			return err
-		}
-		if err := a.trieDB.Commit(root, false, nil); err != nil {
-			return fmt.Errorf("failed to commit atomict trie for root %s at height %d: %w", root, height, err)
-		}
-		log.Info("committed atomic trie", "root", root.String(), "height", height)
-	}
-	return nil
 }
 
 type atomicState struct {
@@ -237,7 +188,7 @@ func (a *atomicState) Accept() error {
 		}
 	}
 
-	if err := a.backend.acceptTrie(a.blockHeight, a.atomicRoot); err != nil {
+	if err := a.backend.atomicTrie.AcceptTrie(a.blockHeight, a.atomicRoot); err != nil {
 		return err
 	}
 	a.backend.lastAcceptedHash = a.blockHash
@@ -261,9 +212,8 @@ func (a *atomicState) Accept() error {
 }
 
 func (a *atomicState) Reject() error {
-	a.backend.trieDB.Dereference(a.atomicRoot)
 	delete(a.backend.verifiedRoots, a.blockHash)
-	return nil
+	return a.backend.atomicTrie.RejectTrie(a.atomicRoot)
 }
 
 func (a *atomicState) Root() common.Hash {

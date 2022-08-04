@@ -113,7 +113,7 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	trie.AssertTrieConsistency(t, targetRoot, serverTrieDB, clientTrieDB, nil)
 
 	// check all commit heights are created
-	for height := atomicTrie.commitHeightInterval; height <= targetHeight; height += atomicTrie.commitHeightInterval {
+	for height := atomicTrie.commitInterval; height <= targetHeight; height += atomicTrie.commitInterval {
 		root, err := atomicTrie.Root(height)
 		assert.NoError(t, err)
 		assert.NotZero(t, root)

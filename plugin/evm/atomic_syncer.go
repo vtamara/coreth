@@ -62,7 +62,7 @@ func newAtomicSyncer(client syncclient.LeafClient, atomicTrie *atomicTrie, targe
 		atomicTrieSnapshot: atomicTrieSnapshot,
 		targetRoot:         targetRoot,
 		targetHeight:       targetHeight,
-		nextCommit:         lastCommit + atomicTrie.commitHeightInterval,
+		nextCommit:         lastCommit + atomicTrie.commitInterval,
 		nextHeight:         lastCommit + 1,
 	}
 	tasks := make(chan syncclient.LeafSyncTask, 1)
@@ -99,7 +99,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 			if err := s.atomicTrie.db.Commit(); err != nil {
 				return err
 			}
-			s.nextCommit += s.atomicTrie.commitHeightInterval
+			s.nextCommit += s.atomicTrie.commitInterval
 		}
 		if err := s.atomicTrieSnapshot.TryUpdate(key, values[i]); err != nil {
 			return err
@@ -129,7 +129,7 @@ func (s *atomicSyncer) onFinish() error {
 		return fmt.Errorf("synced root (%s) does not match expected (%s) for atomic trie ", root, s.targetRoot)
 	}
 	// set the atomic trie's initializedRoot after sync has completed
-	s.atomicTrie.initializedRoot = root
+	s.atomicTrie.lastAcceptedRoot = root
 	return nil
 }
 

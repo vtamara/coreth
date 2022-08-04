@@ -150,7 +150,7 @@ func TestAtomicTrieInitialize(t *testing.T) {
 			// We now index additional operations up the next commit interval in order to confirm that nothing
 			// during the initialization phase will cause an invalid root when indexing continues.
 			nextCommitHeight := nearestCommitHeight(test.lastAcceptedHeight+test.commitInterval, test.commitInterval)
-			snapshot, err := atomicTrie1.OpenTrie(atomicTrie1.initializedRoot)
+			snapshot, err := atomicTrie1.OpenTrie(atomicTrie1.LastAcceptedRoot())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -233,7 +233,7 @@ func newTestAtomicTrieIndexer(t *testing.T) (*atomicTrie, AtomicTrieSnapshot) {
 		t.Fatal(err)
 	}
 	assert.NotNil(t, indexer)
-	snapshot, err := indexer.OpenTrie(indexer.GetInitializedRoot())
+	snapshot, err := indexer.OpenTrie(indexer.LastAcceptedRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +673,7 @@ func benchmarkApplyToSharedMemory(b *testing.B, disk database.Database, blocks u
 	if err != nil {
 		b.Fatal(err)
 	}
-	snapshot, err := atomicTrie.OpenTrie(atomicTrie.lastCommittedHash)
+	snapshot, err := atomicTrie.OpenTrie(atomicTrie.lastCommittedRoot)
 	if err != nil {
 		b.Fatal(err)
 	}
