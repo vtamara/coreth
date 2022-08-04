@@ -1013,17 +1013,10 @@ func (vm *VM) parseBlock(b []byte) (snowman.Block, error) {
 		return nil, err
 	}
 
-	isApricotPhase5 := vm.chainConfig.IsApricotPhase5(new(big.Int).SetUint64(ethBlock.Time()))
-	atomicTxs, err := ExtractAtomicTxs(ethBlock.ExtData(), isApricotPhase5, vm.codec)
+	// Note: the status of block is set by ChainState
+	block, err := vm.newBlock(ethBlock)
 	if err != nil {
 		return nil, err
-	}
-	// Note: the status of block is set by ChainState
-	block := &Block{
-		id:        ids.ID(ethBlock.Hash()),
-		ethBlock:  ethBlock,
-		vm:        vm,
-		atomicTxs: atomicTxs,
 	}
 	// Performing syntactic verification in ParseBlock allows for
 	// short-circuiting bad blocks before they are processed by the VM.
