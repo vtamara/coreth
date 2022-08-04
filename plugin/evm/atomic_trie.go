@@ -404,7 +404,7 @@ func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
 		"lastAcceptedAtomicRoot", a.lastAcceptedRoot,
 		"preCommitEntriesIndexed", preCommitBlockIndexed,
 		"postCommitEntriesIndexed", postCommitTxIndexed,
-		"lastCommittedHash", a.lastCommittedRoot,
+		"lastCommittedRoot", a.lastCommittedRoot,
 		"lastCommittedHeight", a.lastCommittedHeight,
 		"time", time.Since(start),
 	)
