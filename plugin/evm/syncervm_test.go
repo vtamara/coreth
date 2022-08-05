@@ -307,8 +307,9 @@ func createSyncServerAndClientVMs(t *testing.T, test syncTest) *syncVMSetup {
 	// override atomicTrie's commitHeightInterval so the call to [atomicTrie.Index]
 	// creates a commit at the height [syncableInterval]. This is necessary to support
 	// fetching a state summary.
-	serverVM.atomicTrie.(*atomicTrie).commitHeightInterval = test.syncableInterval
-	assert.NoError(t, serverVM.atomicTrie.Index(test.syncableInterval, nil))
+	atomicTrie := serverVM.atomicTrie.(*atomicTrie)
+	atomicTrie.commitInterval = test.syncableInterval
+	assert.NoError(t, atomicTrie.commit(test.syncableInterval, serverVM.atomicTrie.LastAcceptedRoot()))
 	assert.NoError(t, serverVM.db.Commit())
 
 	serverSharedMemories := newSharedMemories(serverAtomicMemory, serverVM.ctx.ChainID, serverVM.ctx.XChainID)

@@ -15,7 +15,6 @@ import (
 	"github.com/ava-labs/coreth/core/types"
 	"github.com/ava-labs/coreth/params"
 
-	"github.com/ava-labs/avalanchego/chains/atomic"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 )
@@ -112,6 +111,24 @@ type Block struct {
 	vm        *VM
 	status    choices.Status
 	atomicTxs []*Tx
+
+	atomicState AtomicState
+}
+
+// newBlock returns a new Block wrapping the ethBlock type and implementing the snowman.Block interface
+func (vm *VM) newBlock(ethBlock *types.Block) (*Block, error) {
+	isApricotPhase5 := vm.chainConfig.IsApricotPhase5(new(big.Int).SetUint64(ethBlock.Time()))
+	atomicTxs, err := ExtractAtomicTxs(ethBlock.ExtData(), isApricotPhase5, vm.codec)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Block{
+		id:        ids.ID(ethBlock.Hash()),
+		ethBlock:  ethBlock,
+		vm:        vm,
+		atomicTxs: atomicTxs,
+	}, nil
 }
 
 // ID implements the snowman.Block interface
@@ -134,53 +151,14 @@ func (b *Block) Accept() error {
 		return fmt.Errorf("failed to put %s as the last accepted block: %w", b.ID(), err)
 	}
 
-	if len(b.atomicTxs) == 0 {
-		if err := b.vm.atomicTrie.Index(b.Height(), nil); err != nil {
-			return err
-		}
-		return vm.db.Commit()
-	}
-
-	batchChainsAndInputs, err := mergeAtomicOps(b.atomicTxs)
-	if err != nil {
-		return err
-	}
 	for _, tx := range b.atomicTxs {
 		// Remove the accepted transaction from the mempool
 		vm.mempool.RemoveTx(tx)
 	}
 
-	isBonus := bonusBlocks.Contains(b.id)
-	if err := b.indexAtomics(vm, b.Height(), b.atomicTxs, batchChainsAndInputs, isBonus); err != nil {
-		return err
-	}
-	// If [b] is a bonus block, then we commit the database without applying the requests from
-	// the atmoic transactions to shared memory.
-	if isBonus {
-		log.Info("skipping atomic tx acceptance on bonus block", "block", b.id)
-		return vm.db.Commit()
-	}
-
-	batch, err := vm.db.CommitBatch()
-	if err != nil {
-		return fmt.Errorf("failed to create commit batch due to: %w", err)
-	}
-	return vm.ctx.SharedMemory.Apply(batchChainsAndInputs, batch)
-}
-
-// indexAtomics writes given list of atomic transactions and atomic operations to atomic repository
-// and atomic trie respectively
-func (b *Block) indexAtomics(vm *VM, height uint64, atomicTxs []*Tx, batchChainsAndInputs map[ids.ID]*atomic.Requests, isBonus bool) error {
-	if isBonus {
-		// avoid indexing atomic operations of txs on bonus blocks in the trie
-		// so we do not re-execute them the second time that they appear
-		return vm.atomicTxRepository.WriteBonus(height, atomicTxs)
-	}
-
-	if err := vm.atomicTxRepository.Write(height, atomicTxs); err != nil {
-		return err
-	}
-	return b.vm.atomicTrie.Index(height, batchChainsAndInputs)
+	// Update VM state for atomic txs in this block. This includes updating the
+	// atomic tx repo, atomic trie, and shared memory.
+	return b.atomicState.Accept()
 }
 
 // Reject implements the snowman.Block interface
@@ -244,6 +222,11 @@ func (b *Block) verify(writes bool) error {
 	}
 
 	if err := b.verifyAtomicTxs(rules); err != nil {
+		return err
+	}
+
+	b.atomicState, err = b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs)
+	if err != nil {
 		return err
 	}
 
