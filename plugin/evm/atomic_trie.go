@@ -321,10 +321,10 @@ func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
 			if err != nil {
 				return err
 			}
-			if err := a.AcceptTrie(nextCommitHeight, root); err != nil {
+			if err := a.commit(nextCommitHeight, root); err != nil {
 				return err
 			}
-			// Write to versiondb to persist changes to disk.
+			// Flush pending changes from versiondb to disk.
 			if err := a.db.Commit(); err != nil {
 				return err
 			}
@@ -371,10 +371,10 @@ func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
 		if err != nil {
 			return err
 		}
-		if err := a.AcceptTrie(nextCommitHeight, root); err != nil {
+		if err := a.commit(nextCommitHeight, root); err != nil {
 			return err
 		}
-		// Write to versiondb to persist changes to disk.
+		// Flush pending changes from versiondb to disk.
 		if err := a.db.Commit(); err != nil {
 			return err
 		}
