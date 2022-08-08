@@ -52,7 +52,6 @@ type stateSyncClientConfig struct {
 	acceptedBlockDB database.Database
 	db              *versiondb.Database
 	atomicTrie      AtomicTrie
-	atomicBackend   AtomicBackend
 
 	client syncclient.Client
 
