@@ -18,6 +18,25 @@ var (
 	_ AtomicState   = &atomicState{}
 )
 
+// AtomicStateGetter contains methods that allow the atomic backend
+// access to the root of the atomic trie at previously verified blocks.
+// The VM also provides access to the last accepted block's ID
+// since decided blocks may not be cached.
+type AtomicStateGetter interface {
+	// GetAtomicState returns the AtomicState that corresponds to the verified
+	// block with the provided ID.
+	// TODO: we can have this get the block instead and introduce an intermediary
+	// interface such as AtomicBlock.
+	GetAtomicState(ids.ID) (AtomicState, error)
+
+	// LastAccepted returns the ID of the last accepted block.
+	//
+	// If no blocks have been accepted by consensus yet, it is assumed there is
+	// a definitionally accepted block, the Genesis block, that will be
+	// returned.
+	LastAccepted() (ids.ID, error)
+}
+
 // AtomicBackend abstracts the verification and processing
 // of atomic transactions
 type AtomicBackend interface {
@@ -34,9 +53,6 @@ type AtomicBackend interface {
 	// corresponding to previously verified block [parentHash].
 	// The atomic trie used to calculate the root is not pinned in memory.
 	CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
-
-	// SetLastAccepted is used after state-sync to reset the last accepted block.
-	SetLastAccepted(lastAcceptedHash common.Hash)
 }
 
 // AtomicState is an abstraction created through AtomicBackend
@@ -56,31 +72,28 @@ type AtomicState interface {
 // atomicBackend implements the AtomicBackend interface using
 // the AtomicTrie, AtomicTxRepository, and the VM's shared memory.
 type atomicBackend struct {
-	lastAcceptedHash common.Hash
-	verifiedRoots    map[common.Hash]common.Hash
-
 	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
 	db           *versiondb.Database // Underlying database
 	sharedMemory atomic.SharedMemory
 
-	repo       AtomicTxRepository
-	atomicTrie AtomicTrie
+	stateGetter AtomicStateGetter
+	repo        AtomicTxRepository
+	atomicTrie  AtomicTrie
 }
 
 // NewAtomicBackend creates an AtomicBackend from the specified dependencies
 func NewAtomicBackend(
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
 	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, atomicTrie AtomicTrie,
-	lastAcceptedHash common.Hash,
+	stateGetter AtomicStateGetter,
 ) (AtomicBackend, error) {
 	return &atomicBackend{
-		db:               db,
-		sharedMemory:     sharedMemory,
-		bonusBlocks:      bonusBlocks,
-		repo:             repo,
-		atomicTrie:       atomicTrie,
-		lastAcceptedHash: lastAcceptedHash,
-		verifiedRoots:    make(map[common.Hash]common.Hash),
+		db:           db,
+		sharedMemory: sharedMemory,
+		bonusBlocks:  bonusBlocks,
+		repo:         repo,
+		atomicTrie:   atomicTrie,
+		stateGetter:  stateGetter,
 	}, nil
 }
 
@@ -88,21 +101,19 @@ func NewAtomicBackend(
 // - the last accepted block
 // - a block that has been verified but not accepted or rejected yet.
 // If [blockHash] is neither of the above, an error is returned.
-func (a *atomicBackend) getAtomicRootAt(blockHash common.Hash) (common.Hash, error) {
-	// TODO: we can implement this in a few ways.
-	if blockHash == a.lastAcceptedHash {
+func (a *atomicBackend) getAtomicRootAt(blockHash ids.ID) (common.Hash, error) {
+	lastAcceptedHash, err := a.stateGetter.LastAccepted()
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if blockHash == lastAcceptedHash {
 		return a.atomicTrie.LastAcceptedRoot(), nil
 	}
-	if root, ok := a.verifiedRoots[blockHash]; ok {
-		return root, nil
+	atomicState, err := a.stateGetter.GetAtomicState(blockHash)
+	if err != nil {
+		return common.Hash{}, err
 	}
-	return common.Hash{}, fmt.Errorf("attempt to access atomic root for an invalid block: %s", blockHash)
-}
-
-// SetLastAccepted is used after state-sync to update the last accepted block hash.
-// TODO: try to remove this
-func (a *atomicBackend) SetLastAccepted(lastAcceptedHash common.Hash) {
-	a.lastAcceptedHash = lastAcceptedHash
+	return atomicState.Root(), nil
 }
 
 // CalculateRootWithTxs calculates the root of the atomic trie that would
@@ -111,7 +122,7 @@ func (a *atomicBackend) SetLastAccepted(lastAcceptedHash common.Hash) {
 // The atomic trie used to calculate the root is not pinned in memory.
 func (a *atomicBackend) CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error) {
 	// access the atomic trie at the parent block
-	parentRoot, err := a.getAtomicRootAt(parentHash)
+	parentRoot, err := a.getAtomicRootAt(ids.ID(parentHash))
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -141,7 +152,7 @@ func (a *atomicBackend) CalculateRootWithTxs(blockHeight uint64, parentHash comm
 // to commit the changes or abort them and free memory.
 func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (AtomicState, error) {
 	// access the atomic trie at the parent block
-	parentRoot, err := a.getAtomicRootAt(parentHash)
+	parentRoot, err := a.getAtomicRootAt(ids.ID(parentHash))
 	if err != nil {
 		return nil, err
 	}
@@ -167,10 +178,6 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 	if err := a.atomicTrie.InsertTrie(root); err != nil {
 		return nil, err
 	}
-
-	// track this block so further blocks can be inserted on top
-	// of this block
-	a.verifiedRoots[blockHash] = root
 
 	// return the AtomicState interface which allows the caller
 	// to Accept or Reject the atomic state changes.
@@ -217,10 +224,6 @@ func (a *atomicState) Accept() error {
 	if err := a.backend.atomicTrie.AcceptTrie(a.blockHeight, a.atomicRoot); err != nil {
 		return err
 	}
-	// Update the last accepted block to this block and remove it from
-	// the map tracking undecided blocks.
-	a.backend.lastAcceptedHash = a.blockHash
-	delete(a.backend.verifiedRoots, a.blockHash)
 
 	// If this is a bonus block, commit the database without applying atomic ops
 	// to shared memory.
@@ -240,8 +243,6 @@ func (a *atomicState) Accept() error {
 
 // Reject frees memory associated with the state change.
 func (a *atomicState) Reject() error {
-	// Remove the block from the map of undecided blocks.
-	delete(a.backend.verifiedRoots, a.blockHash)
 	// Unpin the rejected atomic trie root from memory.
 	return a.backend.atomicTrie.RejectTrie(a.atomicRoot)
 }

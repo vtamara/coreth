@@ -108,6 +108,7 @@ var (
 	_ block.StateSyncableVM          = &VM{}
 	_ block.HeightIndexedChainVM     = &VM{}
 	_ statesyncclient.EthBlockParser = &VM{}
+	_ AtomicStateGetter              = &VM{}
 )
 
 const (
@@ -498,8 +499,7 @@ func (vm *VM) Initialize(
 		return fmt.Errorf("failed to create atomic trie: %w", err)
 	}
 
-	chainLastAccepted := vm.blockChain.LastAcceptedBlock().Hash()
-	vm.atomicBackend, err = NewAtomicBackend(vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, chainLastAccepted)
+	vm.atomicBackend, err = NewAtomicBackend(vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, vm)
 	if err != nil {
 		return fmt.Errorf("failed to create atomic backend: %w", err)
 	}
@@ -1628,6 +1628,21 @@ func (vm *VM) estimateBaseFee(ctx context.Context) (*big.Int, error) {
 	}
 
 	return baseFee, nil
+}
+
+// GetAtomicState implements the AtomicStateGetter interface,
+// allowing the AtomicBackend access to the AtomicState of
+// verified (undecided) blocks.
+func (vm *VM) GetAtomicState(blockID ids.ID) (AtomicState, error) {
+	blockIntf, err := vm.GetBlockInternal(blockID)
+	if err != nil {
+		return nil, fmt.Errorf("could not find atomic state for block %s due to %w", blockID, err)
+	}
+	atomicState := blockIntf.(*Block).atomicState
+	if atomicState == nil {
+		return nil, fmt.Errorf("nil atomic state for block %s", blockID)
+	}
+	return atomicState, nil
 }
 
 func getAtomicRepositoryRepairHeights(chainID *big.Int) []uint64 {
