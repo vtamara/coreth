@@ -298,7 +298,7 @@ func TestRepairAtomicRepositoryForBonusBlockTxs(t *testing.T) {
 	}
 
 	// check completion flag is not set
-	done, err := atomicTxRepository.IsBonusBlocksRepaired()
+	done, err := atomicTxRepository.isBonusBlocksRepaired()
 	assert.NoError(t, err)
 	assert.False(t, done)
 
@@ -315,9 +315,7 @@ func TestRepairAtomicRepositoryForBonusBlockTxs(t *testing.T) {
 	assert.Equal(t, bonus2, foundHeight)
 
 	allHeights := []uint64{canonical, bonus1, bonus2}
-	if err := repairAtomicRepositoryForBonusBlockTxs(
-		atomicTxRepository,
-		db,
+	if err := atomicTxRepository.RepairForBonusBlocks(
 		allHeights,
 		func(height uint64) (*Tx, error) {
 			if height == 10 || height == 20 || height == 30 {
@@ -345,7 +343,7 @@ func TestRepairAtomicRepositoryForBonusBlockTxs(t *testing.T) {
 	}
 
 	// check completion flag is set
-	done, err = atomicTxRepository.IsBonusBlocksRepaired()
+	done, err = atomicTxRepository.isBonusBlocksRepaired()
 	assert.NoError(t, err)
 	assert.True(t, done)
 }
