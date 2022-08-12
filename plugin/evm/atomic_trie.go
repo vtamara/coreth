@@ -297,7 +297,7 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		return err
 	}
 
-	// there have been more blocks after the last block with accepted atomic txs.
+	// check if there are accepted blocks after the last block with accepted atomic txs.
 	if lastAcceptedHeight > height {
 		lastAcceptedRoot := a.atomicTrie.LastAcceptedRoot()
 		if err := a.atomicTrie.InsertTrie(lastAcceptedRoot); err != nil {
