@@ -13,7 +13,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -477,21 +476,26 @@ func (vm *VM) Initialize(
 		return err
 	}
 
+	// initialize bonus blocks on mainnet
+	var (
+		bonusBlockHeights     map[uint64]ids.ID
+		canonicalBlockHeights []uint64
+	)
+	if vm.chainID.Cmp(params.AvalancheMainnetChainID) == 0 {
+		bonusBlockHeights = bonusBlockMainnetHeights
+		canonicalBlockHeights = canonicalBlockMainnetHeights
+	}
+
 	// initialize atomic repository
-	vm.atomicTxRepository, err = NewAtomicTxRepository(vm.db, vm.codec, lastAcceptedHeight)
+	vm.atomicTxRepository, err = NewAtomicTxRepository(
+		vm.db, vm.codec, lastAcceptedHeight,
+		bonusBlockHeights, canonicalBlockHeights,
+		vm.getAtomicTxFromPreApricot5BlockByHeight,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create atomic repository: %w", err)
 	}
-	bonusBlockHeights := make(map[uint64]ids.ID)
-	if vm.chainID.Cmp(params.AvalancheMainnetChainID) == 0 {
-		bonusBlockHeights = bonusBlockMainnetHeights
-	}
-	if err := vm.atomicTxRepository.RepairForBonusBlocks(
-		getAtomicRepositoryRepairHeights(vm.chainID),
-		vm.getAtomicTxFromPreApricot5BlockByHeight,
-	); err != nil {
-		return fmt.Errorf("failed to repair atomic repository: %w", err)
-	}
+
 	vm.atomicTrie, err = NewAtomicTrie(vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.codec, lastAcceptedHeight, vm.config.CommitInterval)
 	if err != nil {
 		return fmt.Errorf("failed to create atomic trie: %w", err)
@@ -1640,23 +1644,6 @@ func (vm *VM) GetAtomicState(blockID ids.ID) (AtomicState, error) {
 		return nil, fmt.Errorf("nil atomic state for block %s", blockID)
 	}
 	return atomicState, nil
-}
-
-func getAtomicRepositoryRepairHeights(chainID *big.Int) []uint64 {
-	if chainID.Cmp(params.AvalancheMainnetChainID) != 0 {
-		return nil
-	}
-	repairHeights := make([]uint64, 0, len(bonusBlockMainnetHeights)+len(canonicalBonusBlocks))
-	for height := range bonusBlockMainnetHeights {
-		repairHeights = append(repairHeights, height)
-	}
-	for _, height := range canonicalBonusBlocks {
-		if _, exists := bonusBlockMainnetHeights[height]; !exists {
-			repairHeights = append(repairHeights, height)
-		}
-	}
-	sort.Slice(repairHeights, func(i, j int) bool { return repairHeights[i] < repairHeights[j] })
-	return repairHeights
 }
 
 func (vm *VM) getAtomicTxFromPreApricot5BlockByHeight(height uint64) (*Tx, error) {

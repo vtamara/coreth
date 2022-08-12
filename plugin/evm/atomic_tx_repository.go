@@ -44,7 +44,6 @@ type AtomicTxRepository interface {
 	WriteBonus(height uint64, txs []*Tx) error
 
 	IterateByHeight(uint64) database.Iterator
-	RepairForBonusBlocks(sortedHeights []uint64, getAtomicTxFromBlockByHeight func(height uint64) (*Tx, error)) error
 }
 
 // atomicTxRepository is a prefixdb implementation of the AtomicTxRepository interface
@@ -66,7 +65,11 @@ type atomicTxRepository struct {
 	codec codec.Manager
 }
 
-func NewAtomicTxRepository(db *versiondb.Database, codec codec.Manager, lastAcceptedHeight uint64) (*atomicTxRepository, error) {
+func NewAtomicTxRepository(
+	db *versiondb.Database, codec codec.Manager, lastAcceptedHeight uint64,
+	bonusBlocks map[uint64]ids.ID, canonicalBlocks []uint64,
+	getAtomicTxFromBlockByHeight func(height uint64) (*Tx, error),
+) (*atomicTxRepository, error) {
 	repo := &atomicTxRepository{
 		acceptedAtomicTxDB:         prefixdb.New(atomicTxIDDBPrefix, db),
 		acceptedAtomicTxByHeightDB: prefixdb.New(atomicHeightTxDBPrefix, db),
@@ -74,7 +77,17 @@ func NewAtomicTxRepository(db *versiondb.Database, codec codec.Manager, lastAcce
 		codec:                      codec,
 		db:                         db,
 	}
-	return repo, repo.initializeHeightIndex(lastAcceptedHeight)
+	if err := repo.initializeHeightIndex(lastAcceptedHeight); err != nil {
+		return nil, err
+	}
+
+	// TODO: remove post blueberry as all network participants will have applied the repair script.
+	repairHeights := getAtomicRepositoryRepairHeights(bonusBlocks, canonicalBlocks)
+	if err := repo.RepairForBonusBlocks(repairHeights, getAtomicTxFromBlockByHeight); err != nil {
+		return nil, fmt.Errorf("failed to repair atomic repository: %w", err)
+	}
+
+	return repo, nil
 }
 
 // initializeHeightIndex initializes the atomic repository and takes care of any required migration from the previous database
@@ -419,4 +432,21 @@ func (a *atomicTxRepository) RepairForBonusBlocks(
 	}
 	log.Info("atomic tx repository RepairForBonusBlocks complete", "repairedEntries", repairedEntries)
 	return a.db.Commit()
+}
+
+// getAtomicRepositoryRepairHeights returns a slice containing heights from bonus blocks and
+// canonical blocks sorted by height.
+func getAtomicRepositoryRepairHeights(bonusBlocks map[uint64]ids.ID, canonicalBlocks []uint64) []uint64 {
+	repairHeights := make([]uint64, 0, len(bonusBlocks)+len(canonicalBlocks))
+	for height := range bonusBlocks {
+		repairHeights = append(repairHeights, height)
+	}
+	for _, height := range canonicalBlocks {
+		// avoid appending duplicates
+		if _, exists := bonusBlocks[height]; !exists {
+			repairHeights = append(repairHeights, height)
+		}
+	}
+	sort.Slice(repairHeights, func(i, j int) bool { return repairHeights[i] < repairHeights[j] })
+	return repairHeights
 }

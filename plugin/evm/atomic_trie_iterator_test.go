@@ -24,7 +24,7 @@ func TestIteratorCanIterate(t *testing.T) {
 	lastAcceptedHeight := uint64(1000)
 	db := versiondb.New(memdb.New())
 	codec := testTxCodec()
-	repo, err := NewAtomicTxRepository(db, codec, lastAcceptedHeight)
+	repo, err := NewAtomicTxRepository(db, codec, lastAcceptedHeight, nil, nil, nil)
 	assert.NoError(t, err)
 
 	// create state with multiple transactions
@@ -61,7 +61,7 @@ func TestIteratorHandlesInvalidData(t *testing.T) {
 	lastAcceptedHeight := uint64(1000)
 	db := versiondb.New(memdb.New())
 	codec := testTxCodec()
-	repo, err := NewAtomicTxRepository(db, codec, lastAcceptedHeight)
+	repo, err := NewAtomicTxRepository(db, codec, lastAcceptedHeight, nil, nil, nil)
 	assert.NoError(t, err)
 
 	// create state with multiple transactions
