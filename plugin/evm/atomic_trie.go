@@ -149,16 +149,12 @@ type AtomicTrieIterator interface {
 type atomicTrie struct {
 	commitInterval      uint64              // commit interval, same as commitHeightInterval by default
 	db                  *versiondb.Database // Underlying database
-	bonusBlocks         map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
 	metadataDB          database.Database   // Underlying database containing the atomic trie metadata
-	atomicTrieDB        database.Database   // Underlying database containing the atomic trie
 	trieDB              *trie.Database      // Trie database
-	repo                AtomicTxRepository
-	lastCommittedRoot   common.Hash // trie root of the most recent commit
-	lastCommittedHeight uint64      // index height of the most recent commit
-	lastAcceptedRoot    common.Hash // most recent trie root passed to accept trie or the root of the atomic trie on intialization.
+	lastCommittedRoot   common.Hash         // trie root of the most recent commit
+	lastCommittedHeight uint64              // index height of the most recent commit
+	lastAcceptedRoot    common.Hash         // most recent trie root passed to accept trie or the root of the atomic trie on intialization.
 	codec               codec.Manager
-	log                 log.Logger // struct logger
 	sharedMemory        atomic.SharedMemory
 	memoryCap           common.StorageSize
 	tipBuffer           *core.BoundedBuffer
@@ -176,17 +172,16 @@ type atomicTrieSnapshot struct {
 // during initialization (blocks until ApplyToSharedMemory completes).
 func NewAtomicTrie(
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
-	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, codec codec.Manager, lastAcceptedHeight uint64, commitHeightInterval uint64,
+	codec codec.Manager, lastAcceptedHeight uint64, commitHeightInterval uint64,
 ) (AtomicTrie, error) {
-	return newAtomicTrie(db, sharedMemory, bonusBlocks, repo, codec, lastAcceptedHeight, commitHeightInterval)
+	return newAtomicTrie(db, sharedMemory, codec, lastAcceptedHeight, commitHeightInterval)
 }
 
 // newAtomicTrie returns a new instance of a atomicTrie with a configurable commitHeightInterval, used in testing.
 // Initializes the trie before returning it.
 func newAtomicTrie(
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
-	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, codec codec.Manager,
-	lastAcceptedHeight uint64, commitHeightInterval uint64,
+	codec codec.Manager, lastAcceptedHeight uint64, commitHeightInterval uint64,
 ) (*atomicTrie, error) {
 	atomicTrieDB := prefixdb.New(atomicTrieDBPrefix, db)
 	metadataDB := prefixdb.New(atomicTrieMetaDBPrefix, db)
@@ -214,18 +209,15 @@ func newAtomicTrie(
 	atomicTrie := &atomicTrie{
 		commitInterval:      commitHeightInterval,
 		db:                  db,
-		bonusBlocks:         bonusBlocks,
-		atomicTrieDB:        atomicTrieDB,
 		metadataDB:          metadataDB,
 		trieDB:              trieDB,
-		repo:                repo,
 		codec:               codec,
 		lastCommittedRoot:   root,
 		lastCommittedHeight: height,
 		tipBuffer:           core.NewBoundedBuffer(atomicTrieTipBufferSize, trieDB.Dereference),
-		log:                 log.New("c", "atomicTrie"),
 		sharedMemory:        sharedMemory,
 		memoryCap:           atomicTrieMemoryCap,
+		lastAcceptedRoot:    types.EmptyRootHash,
 	}
 
 	// We call ApplyToSharedMemory here to ensure that if the node was shut down in the middle
@@ -235,7 +227,7 @@ func newAtomicTrie(
 	if err := atomicTrie.ApplyToSharedMemory(lastAcceptedHeight); err != nil {
 		return nil, err
 	}
-	return atomicTrie, atomicTrie.initialize(lastAcceptedHeight)
+	return atomicTrie, nil
 }
 
 // lastCommittedRootIfExists returns the last committed trie root and height if it exists
@@ -267,40 +259,38 @@ func nearestCommitHeight(blockNumber uint64, commitInterval uint64) uint64 {
 }
 
 // initializes the atomic trie using the atomic repository height index.
-// Iterating from the last indexed height to lastAcceptedBlockNumber, making a single commit at the
+// Iterating from the last committed height to the last height indexed
+// in the atomic repository, making a single commit at the
 // most recent height divisible by the commitInterval.
 // Subsequent updates to this trie are made using the Index call as blocks are accepted.
 // Note: this method assumes no atomic txs are applied at genesis.
-func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
+func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 	start := time.Now()
-	a.log.Info("initializing atomic trie", "lastAcceptedBlockNumber", lastAcceptedBlockNumber)
-	// finalCommitHeight is the highest block that can be committed i.e. is divisible by b.commitHeightInterval
-	// Txs from heights greater than commitHeight are to be included in the trie corresponding to the block at
-	// finalCommitHeight+b.commitHeightInterval, which has not been accepted yet.
-	finalCommitHeight := nearestCommitHeight(lastAcceptedBlockNumber, a.commitInterval)
-	uncommittedOpsMap := make(map[uint64]map[ids.ID]*atomic.Requests, lastAcceptedBlockNumber-finalCommitHeight)
 
-	// iterate by height, from [a.lastCommittedHeight+1] to [lastAcceptedBlockNumber]
-	iter := a.repo.IterateByHeight(a.lastCommittedHeight + 1)
+	// track the last committed height and last committed root
+	lastCommittedRoot, lastCommittedHeight := a.atomicTrie.LastCommitted()
+	log.Info("initializing atomic trie", "lastCommittedHeight", lastCommittedHeight)
+
+	// iterate by height, from [lastCommittedHeight+1] to [lastAcceptedBlockNumber]
+	height := lastCommittedHeight
+	iter := a.repo.IterateByHeight(lastCommittedHeight + 1)
 	defer iter.Release()
 
-	preCommitBlockIndexed := 0
-	postCommitTxIndexed := 0
+	heightsIndexed := 0
 	lastUpdate := time.Now()
 
 	// open the atomic trie at the last committed root
-	tr, err := a.OpenTrie(a.lastCommittedRoot)
+	tr, err := a.atomicTrie.OpenTrie(lastCommittedRoot)
 	if err != nil {
 		return err
 	}
 
-	lastHeight := a.lastCommittedHeight // track the last committed height
 	for iter.Next() {
 		// Get the height and transactions for this iteration (from the key and value, respectively)
 		// iterate over the transactions, indexing them if the height is < commit height
 		// otherwise, add the atomic operations from the transaction to the uncommittedOpsMap
-		height := binary.BigEndian.Uint64(iter.Key())
-		txs, err := ExtractAtomicTxs(iter.Value(), true, a.codec)
+		height = binary.BigEndian.Uint64(iter.Key())
+		txs, err := ExtractAtomicTxs(iter.Value(), true, a.repo.Codec())
 		if err != nil {
 			return err
 		}
@@ -311,43 +301,40 @@ func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
 			return err
 		}
 
-		// Check whether we have crossed over a commitHeight.
-		// If so, make a commit with the current root before modifying the trie.
-		commitHeight := nearestCommitHeight(height, a.commitInterval)
-		for commitHeight > lastHeight && height > commitHeight {
-			nextCommitHeight := lastHeight + a.commitInterval
-
-			root, err := tr.Commit()
-			if err != nil {
-				return err
-			}
-			if err := a.commit(nextCommitHeight, root); err != nil {
-				return err
-			}
-			// Flush pending changes from versiondb to disk.
+		if _, skipBonusBlock := a.bonusBlocks[height]; skipBonusBlock {
+			// If [height] is a bonus block, do not index the atomic operations into the trie
+			continue
+		}
+		if err := tr.UpdateTrie(height, combinedOps); err != nil {
+			return err
+		}
+		root, err := tr.Commit()
+		if err != nil {
+			return err
+		}
+		if err := a.atomicTrie.InsertTrie(root); err != nil {
+			return err
+		}
+		if err := a.atomicTrie.AcceptTrie(height, root); err != nil {
+			return err
+		}
+		// If accepting this root caused a commit, also
+		// flush pending changes from versiondb to disk
+		// to preserve progress.
+		newCommitRoot, newCommitHeight := a.atomicTrie.LastCommitted()
+		if newCommitHeight > lastCommittedHeight {
 			if err := a.db.Commit(); err != nil {
 				return err
 			}
 
-			lastHeight = nextCommitHeight
+			lastCommittedHeight = newCommitHeight
+			lastCommittedRoot = newCommitRoot
 		}
 
-		if _, skipBonusBlock := a.bonusBlocks[height]; skipBonusBlock {
-			// If [height] is a bonus block, do not index the atomic operations into the trie
-		} else if height > finalCommitHeight {
-			// if height is greater than commit height, add it to the map so that we can write it later
-			// this is to ensure we have all the data before the commit height so that we can commit the
-			// trie
-			uncommittedOpsMap[height] = combinedOps
-		} else {
-			if err := tr.UpdateTrie(height, combinedOps); err != nil {
-				return err
-			}
-			preCommitBlockIndexed++
-		}
+		heightsIndexed++
 
 		if time.Since(lastUpdate) > progressLogUpdate {
-			a.log.Info("imported entries into atomic trie pre-commit", "heightsIndexed", preCommitBlockIndexed)
+			log.Info("imported entries into atomic trie pre-commit", "heightsIndexed", heightsIndexed)
 			lastUpdate = time.Now()
 		}
 	}
@@ -355,64 +342,24 @@ func (a *atomicTrie) initialize(lastAcceptedBlockNumber uint64) error {
 		return err
 	}
 
-	// Note: we should never create a commit at the genesis block (should not contain any atomic txs)
-	if lastAcceptedBlockNumber == 0 {
-		a.lastAcceptedRoot = types.EmptyRootHash
-		return nil
-	}
-	// now that all heights less than [finalCommitHeight] have been processed
-	// commit the trie. If [a.lastCommittedHeight] is already the same as
-	// [finalCommitHeight] (or higher, which can occur if we resume a state sync)
-	// we skip this commit.
-	for finalCommitHeight > lastHeight {
-		nextCommitHeight := lastHeight + a.commitInterval
-
-		root, err := tr.Commit()
-		if err != nil {
+	// there have been more blocks after the last block with accepted atomic txs.
+	if lastAcceptedHeight > height {
+		lastAcceptedRoot := a.atomicTrie.LastAcceptedRoot()
+		if err := a.atomicTrie.InsertTrie(lastAcceptedRoot); err != nil {
 			return err
 		}
-		if err := a.commit(nextCommitHeight, root); err != nil {
+		if err := a.atomicTrie.AcceptTrie(lastAcceptedHeight, lastAcceptedRoot); err != nil {
 			return err
 		}
-		// Flush pending changes from versiondb to disk.
-		if err := a.db.Commit(); err != nil {
-			return err
-		}
-
-		lastHeight = nextCommitHeight
 	}
 
-	// process uncommitted ops for heights > finalCommitHeight
-	for height, ops := range uncommittedOpsMap {
-		if err := tr.UpdateTrie(height, ops); err != nil {
-			return fmt.Errorf("failed to update trie at height %d: %w", height, err)
-		}
-
-		postCommitTxIndexed++
-		if time.Since(lastUpdate) > progressLogUpdate {
-			a.log.Info("imported entries into atomic trie post-commit", "entriesIndexed", postCommitTxIndexed)
-			lastUpdate = time.Now()
-		}
-	}
-	a.lastAcceptedRoot, err = tr.Commit()
-	if err != nil {
-		return err
-	}
-	if err := a.InsertTrie(a.lastAcceptedRoot); err != nil {
-		return err
-	}
-	if err := a.AcceptTrie(lastAcceptedBlockNumber, a.lastAcceptedRoot); err != nil {
-		return err
-	}
-
-	a.log.Info(
+	log.Info(
 		"finished initializing atomic trie",
-		"lastAcceptedBlockNumber", lastAcceptedBlockNumber,
-		"lastAcceptedAtomicRoot", a.lastAcceptedRoot,
-		"preCommitEntriesIndexed", preCommitBlockIndexed,
-		"postCommitEntriesIndexed", postCommitTxIndexed,
-		"lastCommittedRoot", a.lastCommittedRoot,
-		"lastCommittedHeight", a.lastCommittedHeight,
+		"lastAcceptedHeight", lastAcceptedHeight,
+		"lastAcceptedAtomicRoot", a.atomicTrie.LastAcceptedRoot(),
+		"heightsIndexed", heightsIndexed,
+		"lastCommittedRoot", lastCommittedRoot,
+		"lastCommittedHeight", lastCommittedHeight,
 		"time", time.Since(start),
 	)
 	return nil
@@ -455,7 +402,7 @@ func (a *atomicTrie) commit(height uint64, root common.Hash) error {
 	if err := a.trieDB.Commit(root, false, nil); err != nil {
 		return err
 	}
-	a.log.Info("committed atomic trie", "root", root.String(), "height", height)
+	log.Info("committed atomic trie", "root", root.String(), "height", height)
 	return a.updateLastCommitted(root, height)
 }
 
@@ -692,6 +639,16 @@ func (a *atomicTrie) InsertTrie(root common.Hash) error {
 }
 
 func (a *atomicTrie) AcceptTrie(height uint64, root common.Hash) error {
+	// Check whether we have crossed over a commitHeight.
+	// If so, make a commit with the last accepted root.
+	commitHeight := nearestCommitHeight(height, a.commitInterval)
+	for commitHeight > a.lastCommittedHeight && height > commitHeight {
+		nextCommitHeight := a.lastCommittedHeight + a.commitInterval
+		if err := a.commit(nextCommitHeight, a.lastAcceptedRoot); err != nil {
+			return err
+		}
+	}
+
 	// Attempt to dereference roots at least [tipBufferSize] old
 	//
 	// Note: It is safe to dereference roots that have been committed to disk
@@ -699,8 +656,7 @@ func (a *atomicTrie) AcceptTrie(height uint64, root common.Hash) error {
 	a.tipBuffer.Insert(root)
 
 	// Commit this root if we have reached the [commitInterval].
-	modCommitInterval := height % a.commitInterval
-	if modCommitInterval == 0 {
+	if commitHeight == height {
 		if err := a.commit(height, root); err != nil {
 			return err
 		}

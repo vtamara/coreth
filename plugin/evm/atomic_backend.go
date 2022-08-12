@@ -53,6 +53,8 @@ type AtomicBackend interface {
 	// corresponding to previously verified block [parentHash].
 	// The atomic trie used to calculate the root is not pinned in memory.
 	CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
+
+	AtomicTrie() AtomicTrie
 }
 
 // AtomicState is an abstraction created through AtomicBackend
@@ -84,17 +86,23 @@ type atomicBackend struct {
 // NewAtomicBackend creates an AtomicBackend from the specified dependencies
 func NewAtomicBackend(
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
-	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository, atomicTrie AtomicTrie,
+	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository,
+	lastAcceptedHeight uint64, commitHeightInterval uint64,
 	stateGetter AtomicStateGetter,
 ) (AtomicBackend, error) {
-	return &atomicBackend{
+	atomicTrie, err := newAtomicTrie(db, sharedMemory, repo.Codec(), lastAcceptedHeight, commitHeightInterval)
+	if err != nil {
+		return nil, err
+	}
+	atomicBackend := &atomicBackend{
 		db:           db,
 		sharedMemory: sharedMemory,
 		bonusBlocks:  bonusBlocks,
 		repo:         repo,
 		atomicTrie:   atomicTrie,
 		stateGetter:  stateGetter,
-	}, nil
+	}
+	return atomicBackend, atomicBackend.initialize(lastAcceptedHeight)
 }
 
 // getAtomicRootAt returns the atomic trie root for a block that is either:
@@ -189,6 +197,10 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		atomicOps:   atomicOps,
 		atomicRoot:  root,
 	}, nil
+}
+
+func (a *atomicBackend) AtomicTrie() AtomicTrie {
+	return a.atomicTrie
 }
 
 // atomicState implements the AtomicState interface using

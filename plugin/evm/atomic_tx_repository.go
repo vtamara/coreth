@@ -43,7 +43,8 @@ type AtomicTxRepository interface {
 	Write(height uint64, txs []*Tx) error
 	WriteBonus(height uint64, txs []*Tx) error
 
-	IterateByHeight(uint64) database.Iterator
+	IterateByHeight(start uint64) database.Iterator
+	Codec() codec.Manager
 }
 
 // atomicTxRepository is a prefixdb implementation of the AtomicTxRepository interface
@@ -367,6 +368,10 @@ func (a *atomicTxRepository) IterateByHeight(height uint64) database.Iterator {
 	heightBytes := make([]byte, wrappers.LongLen)
 	binary.BigEndian.PutUint64(heightBytes, height)
 	return a.acceptedAtomicTxByHeightDB.NewIteratorWithStart(heightBytes)
+}
+
+func (a *atomicTxRepository) Codec() codec.Manager {
+	return a.codec
 }
 
 func (a *atomicTxRepository) isBonusBlocksRepaired() (bool, error) {

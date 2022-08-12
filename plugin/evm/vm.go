@@ -495,16 +495,13 @@ func (vm *VM) Initialize(
 	if err != nil {
 		return fmt.Errorf("failed to create atomic repository: %w", err)
 	}
-
-	vm.atomicTrie, err = NewAtomicTrie(vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.codec, lastAcceptedHeight, vm.config.CommitInterval)
-	if err != nil {
-		return fmt.Errorf("failed to create atomic trie: %w", err)
-	}
-
-	vm.atomicBackend, err = NewAtomicBackend(vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, vm.atomicTrie, vm)
+	vm.atomicBackend, err = NewAtomicBackend(
+		vm.db, vm.ctx.SharedMemory, bonusBlockHeights, vm.atomicTxRepository, lastAcceptedHeight, vm.config.CommitInterval, vm,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create atomic backend: %w", err)
 	}
+	vm.atomicTrie = vm.atomicBackend.AtomicTrie()
 
 	go vm.ctx.Log.RecoverAndPanic(vm.startContinuousProfiler)
 
