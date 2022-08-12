@@ -7,8 +7,11 @@ import (
 	"fmt"
 
 	"github.com/ava-labs/avalanchego/chains/atomic"
+	"github.com/ava-labs/avalanchego/database"
+	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
+	syncclient "github.com/ava-labs/coreth/sync/client"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -54,7 +57,26 @@ type AtomicBackend interface {
 	// The atomic trie used to calculate the root is not pinned in memory.
 	CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
 
+	// AtomicTrie returns the atomic trie managed by this backend.
 	AtomicTrie() AtomicTrie
+
+	// ApplyToSharedMemory applies the atomic operations that have been indexed into the trie
+	// but not yet applied to shared memory for heights less than or equal to [lastAcceptedBlock].
+	// This executes operations in the range [cursorHeight+1, lastAcceptedBlock].
+	// The cursor is initially set by  MarkApplyToSharedMemoryCursor to signal to the atomic trie
+	// the range of operations that were added to the trie without being executed on shared memory.
+	ApplyToSharedMemory(lastAcceptedBlock uint64) error
+
+	// MarkApplyToSharedMemoryCursor marks the atomic trie as containing atomic ops that
+	// have not been executed on shared memory starting at [previousLastAcceptedHeight+1].
+	// This is used when state sync syncs the atomic trie, such that the atomic operations
+	// from [previousLastAcceptedHeight+1] to the [lastAcceptedHeight] set by state sync
+	// will not have been executed on shared memory.
+	MarkApplyToSharedMemoryCursor(previousLastAcceptedHeight uint64) error
+
+	// Syncer creates and returns a new Syncer object that can be used to sync the
+	// state of the atomic trie from peers
+	Syncer(client syncclient.LeafClient, targetRoot common.Hash, targetHeight uint64) (Syncer, error)
 }
 
 // AtomicState is an abstraction created through AtomicBackend
@@ -76,6 +98,7 @@ type AtomicState interface {
 type atomicBackend struct {
 	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
 	db           *versiondb.Database // Underlying database
+	metadataDB   database.Database   // Underlying database containing the atomic trie metadata
 	sharedMemory atomic.SharedMemory
 
 	stateGetter AtomicStateGetter
@@ -87,20 +110,32 @@ type atomicBackend struct {
 func NewAtomicBackend(
 	db *versiondb.Database, sharedMemory atomic.SharedMemory,
 	bonusBlocks map[uint64]ids.ID, repo AtomicTxRepository,
-	lastAcceptedHeight uint64, commitHeightInterval uint64,
+	lastAcceptedHeight uint64, commitInterval uint64,
 	stateGetter AtomicStateGetter,
 ) (AtomicBackend, error) {
-	atomicTrie, err := newAtomicTrie(db, sharedMemory, repo.Codec(), lastAcceptedHeight, commitHeightInterval)
+	atomicTrieDB := prefixdb.New(atomicTrieDBPrefix, db)
+	metadataDB := prefixdb.New(atomicTrieMetaDBPrefix, db)
+
+	atomicTrie, err := newAtomicTrie(atomicTrieDB, metadataDB, repo.Codec(), lastAcceptedHeight, commitInterval)
 	if err != nil {
 		return nil, err
 	}
 	atomicBackend := &atomicBackend{
 		db:           db,
+		metadataDB:   metadataDB,
 		sharedMemory: sharedMemory,
 		bonusBlocks:  bonusBlocks,
 		repo:         repo,
 		atomicTrie:   atomicTrie,
 		stateGetter:  stateGetter,
+	}
+
+	// We call ApplyToSharedMemory here to ensure that if the node was shut down in the middle
+	// of applying atomic operations from state sync, we finish the operation to ensure we never
+	// return an atomic trie that is out of sync with shared memory.
+	// In normal operation, the cursor is not set, such that this call will be a no-op.
+	if err := atomicBackend.ApplyToSharedMemory(lastAcceptedHeight); err != nil {
+		return nil, err
 	}
 	return atomicBackend, atomicBackend.initialize(lastAcceptedHeight)
 }

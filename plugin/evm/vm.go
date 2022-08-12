@@ -617,7 +617,7 @@ func (vm *VM) initializeStateSyncClient(lastAcceptedHeight uint64) error {
 		metadataDB:         vm.metadataDB,
 		acceptedBlockDB:    vm.acceptedBlockDB,
 		db:                 vm.db,
-		atomicTrie:         vm.atomicTrie,
+		atomicBackend:      vm.atomicBackend,
 		toEngine:           vm.toEngine,
 	})
 

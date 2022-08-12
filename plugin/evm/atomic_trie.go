@@ -11,8 +11,6 @@ import (
 	"github.com/ava-labs/avalanchego/chains/atomic"
 	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database"
-	"github.com/ava-labs/avalanchego/database/prefixdb"
-	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
@@ -66,24 +64,6 @@ type AtomicTrie interface {
 	// if trie was not committed at provided height, it returns
 	// common.Hash{} instead
 	Root(height uint64) (common.Hash, error)
-
-	// ApplyToSharedMemory applies the atomic operations that have been indexed into the trie
-	// but not yet applied to shared memory for heights less than or equal to [lastAcceptedBlock].
-	// This executes operations in the range [cursorHeight+1, lastAcceptedBlock].
-	// The cursor is initially set by  MarkApplyToSharedMemoryCursor to signal to the atomic trie
-	// the range of operations that were added to the trie without being executed on shared memory.
-	ApplyToSharedMemory(lastAcceptedBlock uint64) error
-
-	// MarkApplyToSharedMemoryCursor marks the atomic trie as containing atomic ops that
-	// have not been executed on shared memory starting at [previousLastAcceptedHeight+1].
-	// This is used when state sync syncs the atomic trie, such that the atomic operations
-	// from [previousLastAcceptedHeight+1] to the [lastAcceptedHeight] set by state sync
-	// will not have been executed on shared memory.
-	MarkApplyToSharedMemoryCursor(previousLastAcceptedHeight uint64) error
-
-	// Syncer creates and returns a new Syncer object that can be used to sync the
-	// state of the atomic trie from peers
-	Syncer(client syncclient.LeafClient, targetRoot common.Hash, targetHeight uint64) (Syncer, error)
 
 	// LastAcceptedRoot returns the most recent accepted root of the atomic trie,
 	// or the root it was initialized to if no new tries were accepted yet.
@@ -147,15 +127,13 @@ type AtomicTrieIterator interface {
 
 // atomicTrie implements the AtomicTrie interface
 type atomicTrie struct {
-	commitInterval      uint64              // commit interval, same as commitHeightInterval by default
-	db                  *versiondb.Database // Underlying database
-	metadataDB          database.Database   // Underlying database containing the atomic trie metadata
-	trieDB              *trie.Database      // Trie database
-	lastCommittedRoot   common.Hash         // trie root of the most recent commit
-	lastCommittedHeight uint64              // index height of the most recent commit
-	lastAcceptedRoot    common.Hash         // most recent trie root passed to accept trie or the root of the atomic trie on intialization.
+	commitInterval      uint64            // commit interval, same as commitHeightInterval by default
+	metadataDB          database.Database // Underlying database containing the atomic trie metadata
+	trieDB              *trie.Database    // Trie database
+	lastCommittedRoot   common.Hash       // trie root of the most recent commit
+	lastCommittedHeight uint64            // index height of the most recent commit
+	lastAcceptedRoot    common.Hash       // most recent trie root passed to accept trie or the root of the atomic trie on intialization.
 	codec               codec.Manager
-	sharedMemory        atomic.SharedMemory
 	memoryCap           common.StorageSize
 	tipBuffer           *core.BoundedBuffer
 }
@@ -166,25 +144,12 @@ type atomicTrieSnapshot struct {
 	atomicTrie *atomicTrie
 }
 
-// NewAtomicTrie returns a new instance of a atomicTrie with the default commitHeightInterval.
-// Initializes the trie before returning it.
-// If the cursor set by MarkApplyToSharedMemoryCursor exists, the atomic operations are applied synchronously
-// during initialization (blocks until ApplyToSharedMemory completes).
-func NewAtomicTrie(
-	db *versiondb.Database, sharedMemory atomic.SharedMemory,
-	codec codec.Manager, lastAcceptedHeight uint64, commitHeightInterval uint64,
-) (AtomicTrie, error) {
-	return newAtomicTrie(db, sharedMemory, codec, lastAcceptedHeight, commitHeightInterval)
-}
-
 // newAtomicTrie returns a new instance of a atomicTrie with a configurable commitHeightInterval, used in testing.
 // Initializes the trie before returning it.
 func newAtomicTrie(
-	db *versiondb.Database, sharedMemory atomic.SharedMemory,
+	atomicTrieDB database.Database, metadataDB database.Database,
 	codec codec.Manager, lastAcceptedHeight uint64, commitHeightInterval uint64,
 ) (*atomicTrie, error) {
-	atomicTrieDB := prefixdb.New(atomicTrieDBPrefix, db)
-	metadataDB := prefixdb.New(atomicTrieMetaDBPrefix, db)
 	root, height, err := lastCommittedRootIfExists(metadataDB)
 	if err != nil {
 		return nil, err
@@ -206,28 +171,18 @@ func newAtomicTrie(
 			Preimages: false, // Keys are not hashed, so there is no need for preimages
 		},
 	)
-	atomicTrie := &atomicTrie{
+
+	return &atomicTrie{
 		commitInterval:      commitHeightInterval,
-		db:                  db,
 		metadataDB:          metadataDB,
 		trieDB:              trieDB,
 		codec:               codec,
 		lastCommittedRoot:   root,
 		lastCommittedHeight: height,
 		tipBuffer:           core.NewBoundedBuffer(atomicTrieTipBufferSize, trieDB.Dereference),
-		sharedMemory:        sharedMemory,
 		memoryCap:           atomicTrieMemoryCap,
 		lastAcceptedRoot:    types.EmptyRootHash,
-	}
-
-	// We call ApplyToSharedMemory here to ensure that if the node was shut down in the middle
-	// of applying atomic operations from state sync, we finish the operation to ensure we never
-	// return an atomic trie that is out of sync with shared memory.
-	// In normal operation, the cursor is not set, such that this call will be a no-op.
-	if err := atomicTrie.ApplyToSharedMemory(lastAcceptedHeight); err != nil {
-		return nil, err
-	}
-	return atomicTrie, nil
+	}, nil
 }
 
 // lastCommittedRootIfExists returns the last committed trie root and height if it exists
@@ -517,7 +472,7 @@ func getRoot(metadataDB database.Database, height uint64) (common.Hash, error) {
 // This executes operations in the range [cursorHeight+1, lastAcceptedBlock].
 // The cursor is initially set by  MarkApplyToSharedMemoryCursor to signal to the atomic trie
 // the range of operations that were added to the trie without being executed on shared memory.
-func (a *atomicTrie) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
+func (a *atomicBackend) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 	sharedMemoryCursor, err := a.metadataDB.Get(appliedSharedMemoryCursorKey)
 	if err == database.ErrNotFound {
 		return nil
@@ -525,9 +480,11 @@ func (a *atomicTrie) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 		return err
 	}
 
-	log.Info("applying atomic operations to shared memory", "root", a.lastCommittedRoot, "lastAcceptedBlock", lastAcceptedBlock, "startHeight", binary.BigEndian.Uint64(sharedMemoryCursor[:wrappers.LongLen]))
+	lastCommittedRoot, _ := a.atomicTrie.LastCommitted()
+	fmt.Printf("apply %v %v\n", lastCommittedRoot, a.atomicTrie)
+	log.Info("applying atomic operations to shared memory", "root", lastCommittedRoot, "lastAcceptedBlock", lastAcceptedBlock, "startHeight", binary.BigEndian.Uint64(sharedMemoryCursor[:wrappers.LongLen]))
 
-	it, err := a.Iterator(a.lastCommittedRoot, sharedMemoryCursor)
+	it, err := a.atomicTrie.Iterator(lastCommittedRoot, sharedMemoryCursor)
 	if err != nil {
 		return err
 	}
@@ -606,7 +563,7 @@ func (a *atomicTrie) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 // This is used when state sync syncs the atomic trie, such that the atomic operations
 // from [previousLastAcceptedHeight+1] to the [lastAcceptedHeight] set by state sync
 // will not have been executed on shared memory.
-func (a *atomicTrie) MarkApplyToSharedMemoryCursor(previousLastAcceptedHeight uint64) error {
+func (a *atomicBackend) MarkApplyToSharedMemoryCursor(previousLastAcceptedHeight uint64) error {
 	// Set the cursor to [previousLastAcceptedHeight+1] so that we begin the iteration at the
 	// first item that has not been applied to shared memory.
 	return database.PutUInt64(a.metadataDB, appliedSharedMemoryCursorKey, previousLastAcceptedHeight+1)
@@ -614,7 +571,7 @@ func (a *atomicTrie) MarkApplyToSharedMemoryCursor(previousLastAcceptedHeight ui
 
 // Syncer creates and returns a new Syncer object that can be used to sync the
 // state of the atomic trie from peers
-func (a *atomicTrie) Syncer(client syncclient.LeafClient, targetRoot common.Hash, targetHeight uint64) (Syncer, error) {
+func (a *atomicBackend) Syncer(client syncclient.LeafClient, targetRoot common.Hash, targetHeight uint64) (Syncer, error) {
 	return newAtomicSyncer(client, a, targetRoot, targetHeight)
 }
 

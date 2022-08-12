@@ -304,12 +304,12 @@ func createSyncServerAndClientVMs(t *testing.T, test syncTest) *syncVMSetup {
 		}
 	})
 
-	// override atomicTrie's commitHeightInterval so the call to [atomicTrie.Index]
+	// override serverAtomicTrie's commitInterval so the call to [serverAtomicTrie.Index]
 	// creates a commit at the height [syncableInterval]. This is necessary to support
 	// fetching a state summary.
-	atomicTrie := serverVM.atomicTrie.(*atomicTrie)
-	atomicTrie.commitInterval = test.syncableInterval
-	assert.NoError(t, atomicTrie.commit(test.syncableInterval, atomicTrie.LastAcceptedRoot()))
+	serverAtomicTrie := serverVM.atomicTrie.(*atomicTrie)
+	serverAtomicTrie.commitInterval = test.syncableInterval
+	assert.NoError(t, serverAtomicTrie.commit(test.syncableInterval, serverAtomicTrie.LastAcceptedRoot()))
 	assert.NoError(t, serverVM.db.Commit())
 
 	serverSharedMemories := newSharedMemories(serverAtomicMemory, serverVM.ctx.ChainID, serverVM.ctx.XChainID)
@@ -357,6 +357,9 @@ func createSyncServerAndClientVMs(t *testing.T, test syncTest) *syncVMSetup {
 	enabled, err := syncerVM.StateSyncEnabled()
 	assert.NoError(t, err)
 	assert.True(t, enabled)
+
+	// override [syncerVM]'s commit interval so the atomic trie works correctly.
+	syncerVM.atomicTrie.(*atomicTrie).commitInterval = test.syncableInterval
 
 	// override [serverVM]'s SendAppResponse function to trigger AppResponse on [syncerVM]
 	serverAppSender.SendAppResponseF = func(nodeID ids.NodeID, requestID uint32, response []byte) error {

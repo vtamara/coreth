@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 
 	"github.com/ava-labs/coreth/plugin/evm/message"
@@ -25,7 +26,8 @@ var (
 // is responsible for orchestrating the sync while atomicSyncer is responsible for maintaining
 // the state of progress and writing the actual atomic trie to the trieDB.
 type atomicSyncer struct {
-	atomicTrie         *atomicTrie
+	db                 *versiondb.Database
+	atomicTrie         AtomicTrie
 	atomicTrieSnapshot AtomicTrieSnapshot // used to update the atomic trie
 	targetRoot         common.Hash
 	targetHeight       uint64
@@ -36,10 +38,6 @@ type atomicSyncer struct {
 	// nextHeight is the height which key / values
 	// are being inserted into [atomicTrie] for
 	nextHeight uint64
-
-	// nextCommit is the next height at which the atomic trie
-	// should be committed.
-	nextCommit uint64
 }
 
 // addZeros adds [common.HashLenth] zeros to [height] and returns the result as []byte
@@ -50,7 +48,8 @@ func addZeroes(height uint64) []byte {
 	return packer.Bytes
 }
 
-func newAtomicSyncer(client syncclient.LeafClient, atomicTrie *atomicTrie, targetRoot common.Hash, targetHeight uint64) (*atomicSyncer, error) {
+func newAtomicSyncer(client syncclient.LeafClient, atomicBackend *atomicBackend, targetRoot common.Hash, targetHeight uint64) (*atomicSyncer, error) {
+	atomicTrie := atomicBackend.AtomicTrie()
 	lastCommittedRoot, lastCommit := atomicTrie.LastCommitted()
 	atomicTrieSnapshot, err := atomicTrie.OpenTrie(lastCommittedRoot)
 	if err != nil {
@@ -58,11 +57,11 @@ func newAtomicSyncer(client syncclient.LeafClient, atomicTrie *atomicTrie, targe
 	}
 
 	atomicSyncer := &atomicSyncer{
+		db:                 atomicBackend.db,
 		atomicTrie:         atomicTrie,
 		atomicTrieSnapshot: atomicTrieSnapshot,
 		targetRoot:         targetRoot,
 		targetHeight:       targetHeight,
-		nextCommit:         lastCommit + atomicTrie.commitInterval,
 		nextHeight:         lastCommit + 1,
 	}
 	tasks := make(chan syncclient.LeafSyncTask, 1)
@@ -80,27 +79,38 @@ func (s *atomicSyncer) Start(ctx context.Context) error {
 
 // onLeafs is the callback for the leaf syncer, which will insert the key-value pairs into the trie.
 func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
+	_, lastCommittedHeight := s.atomicTrie.LastCommitted()
+	lastHeight := lastCommittedHeight // track heights so we calculate roots after each height
 	for i, key := range keys {
 		if len(key) != atomicKeyLength {
 			return fmt.Errorf("unexpected key len (%d) in atomic trie sync", len(key))
 		}
 		// key = height + blockchainID
 		height := binary.BigEndian.Uint64(key[:wrappers.LongLen])
-
-		// Commit the trie and update [nextCommit] if we are crossing a commit interval
-		for height > s.nextCommit {
+		if height > lastHeight {
 			root, err := s.atomicTrieSnapshot.Commit()
 			if err != nil {
 				return err
 			}
-			if err := s.atomicTrie.commit(s.nextCommit, root); err != nil {
+			if err := s.atomicTrie.InsertTrie(root); err != nil {
 				return err
 			}
-			if err := s.atomicTrie.db.Commit(); err != nil {
+			if err := s.atomicTrie.AcceptTrie(lastHeight, root); err != nil {
 				return err
 			}
-			s.nextCommit += s.atomicTrie.commitInterval
+			// If accepting this root caused a commit, also
+			// flush pending changes from versiondb to disk
+			// to preserve progress.
+			_, newCommitHeight := s.atomicTrie.LastCommitted()
+			if newCommitHeight > lastCommittedHeight {
+				if err := s.db.Commit(); err != nil {
+					return err
+				}
+				lastCommittedHeight = newCommitHeight
+			}
+			lastHeight = height
 		}
+
 		if err := s.atomicTrieSnapshot.TryUpdate(key, values[i]); err != nil {
 			return err
 		}
@@ -116,10 +126,13 @@ func (s *atomicSyncer) onFinish() error {
 	if err != nil {
 		return err
 	}
-	if err := s.atomicTrie.commit(s.targetHeight, root); err != nil {
+	if err := s.atomicTrie.InsertTrie(root); err != nil {
 		return err
 	}
-	if err := s.atomicTrie.db.Commit(); err != nil {
+	if err := s.atomicTrie.AcceptTrie(s.targetHeight, root); err != nil {
+		return err
+	}
+	if err := s.db.Commit(); err != nil {
 		return err
 	}
 
@@ -128,8 +141,6 @@ func (s *atomicSyncer) onFinish() error {
 	if s.targetRoot != root {
 		return fmt.Errorf("synced root (%s) does not match expected (%s) for atomic trie ", root, s.targetRoot)
 	}
-	// set the atomic trie's lastAcceptedRoot after sync has completed
-	s.atomicTrie.lastAcceptedRoot = root
 	return nil
 }
 

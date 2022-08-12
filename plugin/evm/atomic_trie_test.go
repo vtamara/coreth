@@ -466,7 +466,7 @@ func newSharedMemories(atomicMemory *atomic.Memory, thisChainID, peerChainID ids
 func TestApplyToSharedMemory(t *testing.T) {
 	type test struct {
 		commitInterval, lastAcceptedHeight uint64
-		setMarker                          func(*atomicTrie) error
+		setMarker                          func(*atomicBackend) error
 		expectOpsApplied                   func(height uint64) bool
 	}
 
@@ -474,13 +474,13 @@ func TestApplyToSharedMemory(t *testing.T) {
 		"marker is set to height": {
 			commitInterval:     10,
 			lastAcceptedHeight: 25,
-			setMarker:          func(a *atomicTrie) error { return a.MarkApplyToSharedMemoryCursor(10) },
+			setMarker:          func(a *atomicBackend) error { return a.MarkApplyToSharedMemoryCursor(10) },
 			expectOpsApplied:   func(height uint64) bool { return height > 10 && height <= 20 },
 		},
 		"marker is set to height + blockchain ID": {
 			commitInterval:     10,
 			lastAcceptedHeight: 25,
-			setMarker: func(a *atomicTrie) error {
+			setMarker: func(a *atomicBackend) error {
 				cursor := make([]byte, wrappers.LongLen+len(blockChainID[:]))
 				binary.BigEndian.PutUint64(cursor, 10)
 				copy(cursor[wrappers.LongLen:], blockChainID[:])
@@ -491,7 +491,7 @@ func TestApplyToSharedMemory(t *testing.T) {
 		"marker not set": {
 			commitInterval:     10,
 			lastAcceptedHeight: 25,
-			setMarker:          func(*atomicTrie) error { return nil },
+			setMarker:          func(*atomicBackend) error { return nil },
 			expectOpsApplied:   func(uint64) bool { return false },
 		},
 	} {
@@ -506,11 +506,9 @@ func TestApplyToSharedMemory(t *testing.T) {
 			// Initialize atomic repository
 			m := atomic.NewMemory(db)
 			sharedMemories := newSharedMemories(m, testCChainID, blockChainID)
-			atomicBackend, err := NewAtomicBackend(
-				db, sharedMemories.thisChain, nil, repo, test.lastAcceptedHeight, test.commitInterval, nil,
-			)
+			backend, err := NewAtomicBackend(db, sharedMemories.thisChain, nil, repo, test.lastAcceptedHeight, test.commitInterval, nil)
 			assert.NoError(t, err)
-			atomicTrie := atomicBackend.AtomicTrie().(*atomicTrie)
+			atomicTrie := backend.AtomicTrie().(*atomicTrie)
 
 			hash, height := atomicTrie.LastCommitted()
 			assert.NotEqual(t, common.Hash{}, hash)
@@ -523,9 +521,9 @@ func TestApplyToSharedMemory(t *testing.T) {
 				}
 			}
 
-			assert.NoError(t, test.setMarker(atomicTrie))
+			assert.NoError(t, test.setMarker(backend.(*atomicBackend)))
 			assert.NoError(t, db.Commit())
-			assert.NoError(t, atomicTrie.ApplyToSharedMemory(test.lastAcceptedHeight))
+			assert.NoError(t, backend.ApplyToSharedMemory(test.lastAcceptedHeight))
 
 			// assert ops were applied as expected
 			for height, ops := range operationsMap {
@@ -541,7 +539,7 @@ func TestApplyToSharedMemory(t *testing.T) {
 			assert.NoError(t, err)
 			assert.False(t, hasMarker)
 			// reinitialize the atomic trie
-			atomicBackend, err = NewAtomicBackend(
+			backend, err = NewAtomicBackend(
 				db, sharedMemories.thisChain, nil, repo, test.lastAcceptedHeight, test.commitInterval, nil,
 			)
 			assert.NoError(t, err)
@@ -687,11 +685,11 @@ func benchmarkApplyToSharedMemory(b *testing.B, disk database.Database, blocks u
 	repo, err := NewAtomicTxRepository(db, codec, lastAcceptedHeight, nil, nil, nil)
 	assert.NoError(b, err)
 
-	atomicBackend, err := NewAtomicBackend(db, sharedMemory, nil, repo, 0, 5000, nil)
+	backend, err := NewAtomicBackend(db, sharedMemory, nil, repo, 0, 5000, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
-	trie := atomicBackend.AtomicTrie()
+	trie := backend.AtomicTrie()
 	lastCommittedRoot, _ := trie.LastCommitted()
 	snapshot, err := trie.OpenTrie(lastCommittedRoot)
 	if err != nil {
@@ -712,9 +710,9 @@ func benchmarkApplyToSharedMemory(b *testing.B, disk database.Database, blocks u
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		trie.(*atomicTrie).sharedMemory = testSharedMemory()
-		assert.NoError(b, trie.MarkApplyToSharedMemoryCursor(0))
+		backend.(*atomicBackend).sharedMemory = testSharedMemory()
+		assert.NoError(b, backend.MarkApplyToSharedMemoryCursor(0))
 		assert.NoError(b, db.Commit())
-		assert.NoError(b, trie.ApplyToSharedMemory(lastAcceptedHeight))
+		assert.NoError(b, backend.ApplyToSharedMemory(lastAcceptedHeight))
 	}
 }
