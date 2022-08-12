@@ -289,7 +289,7 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		heightsIndexed++
 
 		if time.Since(lastUpdate) > progressLogUpdate {
-			log.Info("imported entries into atomic trie pre-commit", "heightsIndexed", heightsIndexed)
+			log.Info("imported entries into atomic trie", "heightsIndexed", heightsIndexed)
 			lastUpdate = time.Now()
 		}
 	}
@@ -481,7 +481,6 @@ func (a *atomicBackend) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 	}
 
 	lastCommittedRoot, _ := a.atomicTrie.LastCommitted()
-	fmt.Printf("apply %v %v\n", lastCommittedRoot, a.atomicTrie)
 	log.Info("applying atomic operations to shared memory", "root", lastCommittedRoot, "lastAcceptedBlock", lastAcceptedBlock, "startHeight", binary.BigEndian.Uint64(sharedMemoryCursor[:wrappers.LongLen]))
 
 	it, err := a.atomicTrie.Iterator(lastCommittedRoot, sharedMemoryCursor)
