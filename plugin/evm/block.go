@@ -161,7 +161,11 @@ func (b *Block) Accept() error {
 		// should never occur since [b] must be verified before calling Accept
 		return err
 	}
-	return atomicState.Accept()
+	commitBatch, err := b.vm.db.CommitBatch()
+	if err != nil {
+		return fmt.Errorf("could not create commit batch processing block[%s]: %w", b.ID(), err)
+	}
+	return atomicState.Accept(commitBatch)
 }
 
 // Reject implements the snowman.Block interface

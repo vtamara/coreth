@@ -79,8 +79,9 @@ type AtomicBackend interface {
 type AtomicState interface {
 	// Root of the atomic trie after applying the state change.
 	Root() common.Hash
-	// Accept applies the state change to VM's persistent storage.
-	Accept() error
+	// Accept applies the state change to VM's persistent storage
+	// Changes are persisted atomically along with the provided [commitBatch].
+	Accept(commitBatch database.Batch) error
 	// Reject frees memory associated with the state change.
 	Reject() error
 }
@@ -479,7 +480,7 @@ func (a *atomicState) Root() common.Hash {
 }
 
 // Accept applies the state change to VM's persistent storage.
-func (a *atomicState) Accept() error {
+func (a *atomicState) Accept(commitBatch database.Batch) error {
 	// Update the atomic tx repository. Note it is necessary to invoke
 	// the correct method taking bonus blocks into consideration.
 	if a.isBonus() {
@@ -501,20 +502,16 @@ func (a *atomicState) Accept() error {
 	a.backend.lastAcceptedHash = a.blockHash
 	delete(a.backend.verifiedRoots, a.blockHash)
 
-	// If this is a bonus block, commit the database without applying atomic ops
+	// If this is a bonus block, write [commitBatch] without applying atomic ops
 	// to shared memory.
 	if a.isBonus() {
 		log.Info("skipping atomic tx acceptance on bonus block", "block", a.blockHash)
-		return a.backend.db.Commit()
+		return commitBatch.Write()
 	}
 
 	// Otherwise, atomically commit pending changes in the version db with
 	// atomic ops to shared memory.
-	batch, err := a.backend.db.CommitBatch()
-	if err != nil {
-		return fmt.Errorf("failed to create commit batch due to: %w", err)
-	}
-	return a.backend.sharedMemory.Apply(a.atomicOps, batch)
+	return a.backend.sharedMemory.Apply(a.atomicOps, commitBatch)
 }
 
 // Reject frees memory associated with the state change.

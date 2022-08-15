@@ -83,23 +83,6 @@ type AtomicTrie interface {
 	RejectTrie(root common.Hash) error
 }
 
-// TODO: rename this
-// AtomicTrieSnapshot represents a modifyable atomic trie
-type AtomicTrieSnapshot interface {
-
-	// TryUpdate updates the underlying trie with the raw key/value bytes.
-	// Used in syncing.
-	TryUpdate(key []byte, val []byte) error
-
-	// Root hashes the changes and generates a root without writing to
-	// the trieDB.
-	Root() common.Hash
-
-	// Commit hashes the changes and generates a root, committing modified
-	// trie nodes to the trieDB.
-	Commit() (common.Hash, error)
-}
-
 // AtomicTrieIterator is a stateful iterator that iterates the leafs of an AtomicTrie
 type AtomicTrieIterator interface {
 	// Next advances the iterator to the next node in the atomic trie and
@@ -135,12 +118,6 @@ type atomicTrie struct {
 	codec               codec.Manager
 	memoryCap           common.StorageSize
 	tipBuffer           *core.BoundedBuffer
-}
-
-// atomicTrieSnapshot implements the AtomicTrieSnapshot interface
-type atomicTrieSnapshot struct {
-	trie       *trie.Trie
-	atomicTrie *atomicTrie
 }
 
 // newAtomicTrie returns a new instance of a atomicTrie with a configurable commitHeightInterval, used in testing.
