@@ -27,11 +27,11 @@ var (
 // is responsible for orchestrating the sync while atomicSyncer is responsible for maintaining
 // the state of progress and writing the actual atomic trie to the trieDB.
 type atomicSyncer struct {
-	db                 *versiondb.Database
-	atomicTrie         AtomicTrie
-	atomicTrieSnapshot *trie.Trie // used to update the atomic trie
-	targetRoot         common.Hash
-	targetHeight       uint64
+	db           *versiondb.Database
+	atomicTrie   AtomicTrie
+	trie         *trie.Trie // used to update the atomic trie
+	targetRoot   common.Hash
+	targetHeight uint64
 
 	// syncer is used to sync leaves from the network.
 	syncer *syncclient.CallbackLeafSyncer
@@ -52,18 +52,18 @@ func addZeroes(height uint64) []byte {
 func newAtomicSyncer(client syncclient.LeafClient, atomicBackend *atomicBackend, targetRoot common.Hash, targetHeight uint64) (*atomicSyncer, error) {
 	atomicTrie := atomicBackend.AtomicTrie()
 	lastCommittedRoot, lastCommit := atomicTrie.LastCommitted()
-	atomicTrieSnapshot, err := atomicTrie.OpenTrie(lastCommittedRoot)
+	trie, err := atomicTrie.OpenTrie(lastCommittedRoot)
 	if err != nil {
 		return nil, err
 	}
 
 	atomicSyncer := &atomicSyncer{
-		db:                 atomicBackend.db,
-		atomicTrie:         atomicTrie,
-		atomicTrieSnapshot: atomicTrieSnapshot,
-		targetRoot:         targetRoot,
-		targetHeight:       targetHeight,
-		nextHeight:         lastCommit + 1,
+		db:           atomicBackend.db,
+		atomicTrie:   atomicTrie,
+		trie:         trie,
+		targetRoot:   targetRoot,
+		targetHeight: targetHeight,
+		nextHeight:   lastCommit + 1,
 	}
 	tasks := make(chan syncclient.LeafSyncTask, 1)
 	tasks <- &atomicSyncerLeafTask{atomicSyncer: atomicSyncer}
@@ -89,7 +89,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 		// key = height + blockchainID
 		height := binary.BigEndian.Uint64(key[:wrappers.LongLen])
 		if height > lastHeight {
-			root, _, err := s.atomicTrieSnapshot.Commit(nil)
+			root, _, err := s.trie.Commit(nil)
 			if err != nil {
 				return err
 			}
@@ -112,7 +112,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 			lastHeight = height
 		}
 
-		if err := s.atomicTrieSnapshot.TryUpdate(key, values[i]); err != nil {
+		if err := s.trie.TryUpdate(key, values[i]); err != nil {
 			return err
 		}
 	}
@@ -123,7 +123,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 // commit the trie to disk and perform the final checks that we synced the target root correctly.
 func (s *atomicSyncer) onFinish() error {
 	// commit the trie on finish
-	root, _, err := s.atomicTrieSnapshot.Commit(nil)
+	root, _, err := s.trie.Commit(nil)
 	if err != nil {
 		return err
 	}

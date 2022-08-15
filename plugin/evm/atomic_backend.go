@@ -463,6 +463,10 @@ func (a *atomicBackend) AtomicTrie() AtomicTrie {
 	return a.atomicTrie
 }
 
+func (a *atomicBackend) AtomicTrie() AtomicTrie {
+	return a.atomicTrie
+}
+
 // atomicState implements the AtomicState interface using
 // a pointer to the atomicBackend.
 type atomicState struct {
