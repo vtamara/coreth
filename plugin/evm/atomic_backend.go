@@ -28,19 +28,15 @@ var (
 // AtomicBackend abstracts the verification and processing
 // of atomic transactions
 type AtomicBackend interface {
-	// CalculateRootWithTxs calculates the root of the atomic trie that would
+	// InsertTxs calculates the root of the atomic trie that would
 	// result from applying [txs] to the atomic trie, starting at the state
 	// corresponding to previously verified block [parentHash].
-	// The atomic trie used to calculate the root is not pinned in memory.
-	CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
-
-	// InsertTxs returns an AtomicState that can be used to transition the VM's
-	// atomic state by applying [txs] to the atomic trie, starting at the state
-	// corresponding to previously verified block [parentHash].
-	// The modified atomic trie is pinned in memory and it's the caller's
-	// responsibility to call either Accept or Reject on the returned AtomicState
-	// to commit the changes or abort them and free memory.
-	InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (AtomicState, error)
+	// If [blockHash] is provided and [writes] is set to true,
+	// the modified atomic trie is pinned in memory and it's the caller's
+	// responsibility to call either Accept or Reject on the AtomicState
+	// which can be retreived from GetVerifiedAtomicState to commit the
+	// changes or abort them and free memory.
+	InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx, writes bool) (common.Hash, error)
 
 	// Returns an AtomicState corresponding to a block hash that has been inserted
 	// but not Accepted or Rejected yet.
@@ -380,69 +376,48 @@ func (a *atomicBackend) SetLastAccepted(lastAcceptedHash common.Hash) {
 	a.lastAcceptedHash = lastAcceptedHash
 }
 
-// CalculateRootWithTxs calculates the root of the atomic trie that would
-// result from applying [txs] to the atomic trie, starting at the state
-// corresponding to previously verified block [parentHash].
-// The atomic trie used to calculate the root is not pinned in memory.
-func (a *atomicBackend) CalculateRootWithTxs(blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error) {
-	// access the atomic trie at the parent block
-	parentRoot, err := a.getAtomicRootAt(parentHash)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	tr, err := a.atomicTrie.OpenTrie(parentRoot)
-	if err != nil {
-		return common.Hash{}, err
-	}
-
-	// update the atomic trie
-	atomicOps, err := mergeAtomicOps(txs)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if err := a.atomicTrie.UpdateTrie(tr, blockHeight, atomicOps); err != nil {
-		return common.Hash{}, err
-	}
-
-	// return the root without pinning the trie to memory
-	return tr.Hash(), nil
-}
-
 // InsertTxs returns an AtomicState that can be used to transition the VM's
 // atomic state by applying [txs] to the atomic trie, starting at the state
 // corresponding to previously verified block [parentHash].
 // The modified atomic trie is pinned in memory and it's the caller's
 // responsibility to call either Accept or Reject on the returned AtomicState
 // to commit the changes or abort them and free memory.
-func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (AtomicState, error) {
+func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx, writes bool) (common.Hash, error) {
 	// access the atomic trie at the parent block
 	parentRoot, err := a.getAtomicRootAt(parentHash)
 	if err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
 	tr, err := a.atomicTrie.OpenTrie(parentRoot)
 	if err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
 
 	// update the atomic trie
 	atomicOps, err := mergeAtomicOps(txs)
 	if err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
 	if err := a.atomicTrie.UpdateTrie(tr, blockHeight, atomicOps); err != nil {
-		return nil, err
+		return common.Hash{}, err
+	}
+
+	// if we are not pinning the atomic trie in memory, we can return early
+	if blockHash == (common.Hash{}) || !writes {
+		return tr.Hash(), nil
 	}
 
 	// get the new root and pin the atomic trie changes in memory.
 	root, _, err := tr.Commit(nil)
 	if err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
 	if err := a.atomicTrie.InsertTrie(root); err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
-	atomicState := &atomicState{
+	// track this block so further blocks can be inserted on top
+	// of this block
+	a.verifiedRoots[blockHash] = &atomicState{
 		backend:     a,
 		blockHash:   blockHash,
 		blockHeight: blockHeight,
@@ -450,14 +425,7 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		atomicOps:   atomicOps,
 		atomicRoot:  root,
 	}
-
-	// track this block so further blocks can be inserted on top
-	// of this block
-	a.verifiedRoots[blockHash] = atomicState
-
-	// return the AtomicState interface which allows the caller
-	// to Accept or Reject the atomic state changes.
-	return atomicState, nil
+	return root, nil
 }
 
 // isBonus returns true if the block for atomicState is a bonus block
@@ -510,16 +478,23 @@ func (a *atomicState) Accept(commitBatch database.Batch) error {
 	a.backend.lastAcceptedHash = a.blockHash
 	delete(a.backend.verifiedRoots, a.blockHash)
 
+	// get changes from the atomic trie and repository in a batch
+	// to be committed atomically with [commitBatch] and shared memory.
+	atomicChangesBatch, err := a.backend.db.CommitBatch()
+	if err != nil {
+		return fmt.Errorf("could not create commit batch in atomicState accept: %w", err)
+	}
+
 	// If this is a bonus block, write [commitBatch] without applying atomic ops
 	// to shared memory.
 	if a.backend.isBonus(a.blockHeight, a.blockHash) {
 		log.Info("skipping atomic tx acceptance on bonus block", "block", a.blockHash)
-		return commitBatch.Write()
+		return atomic.WriteAll(commitBatch, atomicChangesBatch)
 	}
 
 	// Otherwise, atomically commit pending changes in the version db with
 	// atomic ops to shared memory.
-	return a.backend.sharedMemory.Apply(a.atomicOps, commitBatch)
+	return a.backend.sharedMemory.Apply(a.atomicOps, commitBatch, atomicChangesBatch)
 }
 
 // Reject frees memory associated with the state change.

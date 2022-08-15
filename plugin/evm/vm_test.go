@@ -2897,6 +2897,10 @@ func TestReissueAtomicTx(t *testing.T) {
 		t.Fatalf("Expected status of built block to be %s, but found %s", choices.Processing, status)
 	}
 
+	if err := blkA.Verify(); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := vm.SetPreference(blkA.ID()); err != nil {
 		t.Fatal(err)
 	}

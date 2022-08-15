@@ -179,6 +179,14 @@ func (b *Block) Reject() error {
 			log.Debug("Failed to re-issue transaction in rejected block", "txID", tx.ID(), "err", err)
 		}
 	}
+	atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(common.Hash(b.ID()))
+	if err != nil {
+		// should never occur since [b] must be verified before calling Accept
+		return err
+	}
+	if err := atomicState.Reject(); err != nil {
+		return err
+	}
 	return b.vm.blockChain.Reject(b.ethBlock)
 }
 
@@ -237,13 +245,15 @@ func (b *Block) verify(writes bool) error {
 		return b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
 	}
 
-	atomicState, err := b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs)
+	atomicRoot, err := b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs, writes)
 	if err != nil {
 		return err
 	}
 	if err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes); err != nil {
 		// unpin atomicState from memory if block insertion fails
-		_ = atomicState.Reject() // ignore error to return first error instead
+		if atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(atomicRoot); err == nil {
+			_ = atomicState.Reject() // ignore error to return first error instead
+		}
 		return err
 	}
 
