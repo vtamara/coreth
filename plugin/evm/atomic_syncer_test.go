@@ -47,21 +47,21 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	)
 
 	clientDB := versiondb.New(memdb.New())
-
-	repo, err := NewAtomicTxRepository(clientDB, message.Codec, 0)
+	repo, err := NewAtomicTxRepository(clientDB, message.Codec, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal("could not initialize atomix tx repository", err)
 	}
-	atomicTrie, err := newAtomicTrie(clientDB, testSharedMemory(), nil, repo, message.Codec, 0, commitInterval)
+	atomicBackend, err := NewAtomicBackend(clientDB, testSharedMemory(), nil, repo, 0, commitInterval, nil)
 	if err != nil {
-		t.Fatal("could not initialize atomic trie", err)
+		t.Fatal("could not initialize atomic backend", err)
 	}
+	atomicTrie := atomicBackend.AtomicTrie()
 
 	// For each checkpoint, replace the leafsIntercept to shut off the syncer at the correct point and force resume from the checkpoint's
 	// next trie.
 	for i, checkpoint := range checkpoints {
 		// Create syncer targeting the current [syncTrie].
-		syncer, err := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+		syncer, err := atomicBackend.Syncer(mockClient, targetRoot, targetHeight)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +88,7 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	}
 
 	// Create syncer targeting the current [targetRoot].
-	syncer, err := newAtomicSyncer(mockClient, atomicTrie, targetRoot, targetHeight)
+	syncer, err := atomicBackend.Syncer(mockClient, targetRoot, targetHeight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func testAtomicSyncer(t *testing.T, serverTrieDB *trie.Database, targetHeight ui
 	trie.AssertTrieConsistency(t, targetRoot, serverTrieDB, clientTrieDB, nil)
 
 	// check all commit heights are created
-	for height := atomicTrie.commitInterval; height <= targetHeight; height += atomicTrie.commitInterval {
+	for height := uint64(commitInterval); height <= targetHeight; height += commitInterval {
 		root, err := atomicTrie.Root(height)
 		assert.NoError(t, err)
 		assert.NotZero(t, root)

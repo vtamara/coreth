@@ -3765,10 +3765,8 @@ func TestExtraStateChangeAtomicGasLimitExceeded(t *testing.T) {
 }
 
 func TestGetAtomicRepositoryRepairHeights(t *testing.T) {
-	mainnetHeights := getAtomicRepositoryRepairHeights(params.AvalancheMainnetChainID)
+	mainnetHeights := getAtomicRepositoryRepairHeights(bonusBlockMainnetHeights, canonicalBlockMainnetHeights)
 	assert.Len(t, mainnetHeights, 76)
 	sorted := sort.SliceIsSorted(mainnetHeights, func(i, j int) bool { return mainnetHeights[i] < mainnetHeights[j] })
 	assert.True(t, sorted)
-	testnetHeights := getAtomicRepositoryRepairHeights(params.AvalancheFujiChainID)
-	assert.Empty(t, testnetHeights)
 }

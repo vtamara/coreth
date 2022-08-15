@@ -24,7 +24,7 @@ var (
 	bonusBlockMainnetHeights = make(map[uint64]ids.ID)
 	// first height that processed a TX included on a
 	// bonus block is the canonical height for that TX.
-	canonicalBonusBlocks = []uint64{
+	canonicalBlockMainnetHeights = []uint64{
 		102928, 103035, 103038, 103114, 103193,
 		103234, 103338, 103444, 103480, 103491,
 		103513, 103533, 103535, 103538, 103541,
