@@ -560,7 +560,6 @@ func TestApplyToSharedMemory(t *testing.T) {
 			assert.False(t, hasMarker)
 		})
 	}
-
 }
 
 func BenchmarkAtomicTrieInit(b *testing.B) {
