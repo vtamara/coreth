@@ -460,6 +460,14 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 	return atomicState, nil
 }
 
+// isBonus returns true if the block for atomicState is a bonus block
+func (a *atomicBackend) isBonus(blockHeight uint64, blockHash common.Hash) bool {
+	if bonusID, found := a.bonusBlocks[blockHeight]; found {
+		return bonusID == ids.ID(blockHash)
+	}
+	return false
+}
+
 func (a *atomicBackend) AtomicTrie() AtomicTrie {
 	return a.atomicTrie
 }
@@ -483,7 +491,7 @@ func (a *atomicState) Root() common.Hash {
 func (a *atomicState) Accept(commitBatch database.Batch) error {
 	// Update the atomic tx repository. Note it is necessary to invoke
 	// the correct method taking bonus blocks into consideration.
-	if a.isBonus() {
+	if a.backend.isBonus(a.blockHeight, a.blockHash) {
 		if err := a.backend.repo.WriteBonus(a.blockHeight, a.txs); err != nil {
 			return err
 		}
@@ -504,7 +512,7 @@ func (a *atomicState) Accept(commitBatch database.Batch) error {
 
 	// If this is a bonus block, write [commitBatch] without applying atomic ops
 	// to shared memory.
-	if a.isBonus() {
+	if a.backend.isBonus(a.blockHeight, a.blockHash) {
 		log.Info("skipping atomic tx acceptance on bonus block", "block", a.blockHash)
 		return commitBatch.Write()
 	}
@@ -520,12 +528,4 @@ func (a *atomicState) Reject() error {
 	delete(a.backend.verifiedRoots, a.blockHash)
 	// Unpin the rejected atomic trie root from memory.
 	return a.backend.atomicTrie.RejectTrie(a.atomicRoot)
-}
-
-// isBonus returns true if the block for atomicState is a bonus block
-func (a *atomicState) isBonus() bool {
-	if bonusID, found := a.backend.bonusBlocks[a.blockHeight]; found {
-		return bonusID == ids.ID(a.blockHash)
-	}
-	return false
 }
