@@ -816,17 +816,33 @@ func (vm *VM) onExtraStateChange(block *types.Block, state *state.StateDB) (*big
 	var (
 		batchContribution *big.Int = big.NewInt(0)
 		batchGasUsed      *big.Int = big.NewInt(0)
-		timestamp                  = new(big.Int).SetUint64(block.Time())
-		isApricotPhase4            = vm.chainConfig.IsApricotPhase4(timestamp)
-		isApricotPhase5            = vm.chainConfig.IsApricotPhase5(timestamp)
+		header                     = block.Header()
+		rules                      = vm.chainConfig.AvalancheRules(header.Number, new(big.Int).SetUint64(header.Time))
 	)
 
-	txs, err := ExtractAtomicTxs(block.ExtData(), isApricotPhase5, vm.codec)
+	txs, err := ExtractAtomicTxs(block.ExtData(), rules.IsApricotPhase5, vm.codec)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// If there are no transactions, we can return early
+	// If [atomicBackend] is nil, the VM is still initializing and is reprocessing accepted blocks.
+	if vm.atomicBackend != nil {
+		if vm.atomicBackend.IsBonus(block.NumberU64(), block.Hash()) {
+			log.Info("skipping atomic tx verification on bonus block", "block", block.Hash())
+		} else {
+			// Verify [txs] do not conflict with themselves or ancestor blocks.
+			if err := vm.verifyTxs(txs, block.ParentHash(), block.BaseFee(), block.NumberU64(), rules); err != nil {
+				return nil, nil, err
+			}
+		}
+		// Update the atomic backend with [txs] from this block.
+		_, err := vm.atomicBackend.InsertTxs(block.Hash(), block.NumberU64(), block.ParentHash(), txs)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// If there are no transactions, we can return early.
 	if len(txs) == 0 {
 		return nil, nil, nil
 	}
@@ -836,8 +852,8 @@ func (vm *VM) onExtraStateChange(block *types.Block, state *state.StateDB) (*big
 			return nil, nil, err
 		}
 		// If ApricotPhase4 is enabled, calculate the block fee contribution
-		if isApricotPhase4 {
-			contribution, gasUsed, err := tx.BlockFeeContribution(isApricotPhase5, vm.ctx.AVAXAssetID, block.BaseFee())
+		if rules.IsApricotPhase4 {
+			contribution, gasUsed, err := tx.BlockFeeContribution(rules.IsApricotPhase5, vm.ctx.AVAXAssetID, block.BaseFee())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -848,7 +864,7 @@ func (vm *VM) onExtraStateChange(block *types.Block, state *state.StateDB) (*big
 
 		// If ApricotPhase5 is enabled, enforce that the atomic gas used does not exceed the
 		// atomic gas limit.
-		if vm.chainConfig.IsApricotPhase5(timestamp) {
+		if rules.IsApricotPhase5 {
 			// Ensure that [tx] does not push [block] above the atomic gas limit.
 			if batchGasUsed.Cmp(params.AtomicGasLimit) == 1 {
 				return nil, nil, fmt.Errorf("atomic gas used (%d) by block (%s), exceeds atomic gas limit (%d)", batchGasUsed, block.Hash().Hex(), params.AtomicGasLimit)
@@ -1007,7 +1023,7 @@ func (vm *VM) parseBlock(b []byte) (snowman.Block, error) {
 	}
 	// Performing syntactic verification in ParseBlock allows for
 	// short-circuiting bad blocks before they are processed by the VM.
-	if _, err := block.syntacticVerify(); err != nil {
+	if err := block.syntacticVerify(); err != nil {
 		return nil, fmt.Errorf("syntactic block verification failed: %w", err)
 	}
 	return block, nil
@@ -1329,6 +1345,43 @@ func (vm *VM) verifyTx(tx *Tx, parentHash common.Hash, baseFee *big.Int, state *
 		return err
 	}
 	return tx.UnsignedAtomicTx.EVMStateTransfer(vm.ctx, state)
+}
+
+// verifyTxs verifies that [txs] are valid to be issued into a block with parent block [parentHash]
+// using [rules] as the current rule set.
+func (vm *VM) verifyTxs(txs []*Tx, ancestorHash common.Hash, baseFee *big.Int, height uint64, rules params.Rules) error {
+	ancestorID := ids.ID(ancestorHash)
+	// If the ancestor is unknown, then the parent failed verification when
+	// it was called.
+	// If the ancestor is rejected, then this block shouldn't be inserted
+	// into the canonical chain because the parent will be missing.
+	ancestorInf, err := vm.GetBlockInternal(ancestorID)
+	if err != nil {
+		return errRejectedParent
+	}
+	if blkStatus := ancestorInf.Status(); blkStatus == choices.Unknown || blkStatus == choices.Rejected {
+		return errRejectedParent
+	}
+	ancestor, ok := ancestorInf.(*Block)
+	if !ok {
+		return fmt.Errorf("expected parent block %s, to be *Block but is %T", ancestor.ID(), ancestorInf)
+	}
+
+	// Ensure each tx in [txs] doesn't conflict with any other atomic tx in
+	// a processing ancestor block.
+	inputs := &ids.Set{}
+	for _, atomicTx := range txs {
+		utx := atomicTx.UnsignedAtomicTx
+		if err := utx.SemanticVerify(vm, atomicTx, ancestor, baseFee, rules); err != nil {
+			return fmt.Errorf("invalid block due to failed semanatic verify: %w at height %d", err, height)
+		}
+		txInputs := utx.InputUTXOs()
+		if inputs.Overlaps(txInputs) {
+			return errConflictingAtomicInputs
+		}
+		inputs.Union(txInputs)
+	}
+	return nil
 }
 
 // GetAtomicUTXOs returns the utxos that at least one of the provided addresses is

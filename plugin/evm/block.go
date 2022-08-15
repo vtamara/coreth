@@ -13,14 +13,12 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/ava-labs/coreth/core/types"
-	"github.com/ava-labs/coreth/params"
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 )
 
 var (
-	bonusBlocks              = ids.Set{}
 	bonusBlockMainnetHeights = make(map[uint64]ids.ID)
 	// first height that processed a TX included on a
 	// bonus block is the canonical height for that TX.
@@ -99,7 +97,6 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		bonusBlocks.Add(blkID)
 		bonusBlockMainnetHeights[height] = blkID
 	}
 }
@@ -215,14 +212,14 @@ func (b *Block) Timestamp() time.Time {
 }
 
 // syntacticVerify verifies that a *Block is well-formed.
-func (b *Block) syntacticVerify() (params.Rules, error) {
+func (b *Block) syntacticVerify() error {
 	if b == nil || b.ethBlock == nil {
-		return params.Rules{}, errInvalidBlock
+		return errInvalidBlock
 	}
 
 	header := b.ethBlock.Header()
 	rules := b.vm.chainConfig.AvalancheRules(header.Number, new(big.Int).SetUint64(header.Time))
-	return rules, b.vm.syntacticBlockValidator.SyntacticVerify(b, rules)
+	return b.vm.syntacticBlockValidator.SyntacticVerify(b, rules)
 }
 
 // Verify implements the snowman.Block interface
@@ -231,78 +228,23 @@ func (b *Block) Verify() error {
 }
 
 func (b *Block) verify(writes bool) error {
-	rules, err := b.syntacticVerify()
-	if err != nil {
+	if err := b.syntacticVerify(); err != nil {
 		return fmt.Errorf("syntactic block verification failed: %w", err)
 	}
 
-	if err := b.verifyAtomicTxs(rules); err != nil {
-		return err
-	}
-
-	if !writes {
-		// if there are no writes, we can skip modifying the atomic state.
-		return b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
-	}
-
-	atomicRoot, err := b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs, writes)
-	if err != nil {
-		return err
-	}
-	if err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes); err != nil {
-		// unpin atomicState from memory if block insertion fails
-		if atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(atomicRoot); err == nil {
-			_ = atomicState.Reject() // ignore error to return first error instead
+	err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
+	if err != nil || !writes {
+		// if an error occurred inserting the block into the chain
+		// or if we are not pinning to memory, unpin the atomic trie
+		// changes from memory (if they were pinned).
+		if atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(b.ethBlock.Hash()); err == nil {
+			if err := atomicState.Reject(); err != nil {
+				// Log this error so we can return the original error instead.
+				log.Warn("error unpinning atomic trie changes", "block", b.ethBlock.Hash(), "err", err)
+			}
 		}
-		return err
 	}
-
-	return nil
-}
-
-func (b *Block) verifyAtomicTxs(rules params.Rules) error {
-	// Ensure that the parent was verified and inserted correctly.
-	ancestorID := b.Parent()
-	ancestorHash := common.Hash(ancestorID)
-	if !b.vm.blockChain.HasBlock(ancestorHash, b.Height()-1) {
-		return errRejectedParent
-	}
-
-	// If the ancestor is unknown, then the parent failed verification when
-	// it was called.
-	// If the ancestor is rejected, then this block shouldn't be inserted
-	// into the canonical chain because the parent will be missing.
-	ancestorInf, err := b.vm.GetBlockInternal(ancestorID)
-	if err != nil {
-		return errRejectedParent
-	}
-	if blkStatus := ancestorInf.Status(); blkStatus == choices.Unknown || blkStatus == choices.Rejected {
-		return errRejectedParent
-	}
-	ancestor, ok := ancestorInf.(*Block)
-	if !ok {
-		return fmt.Errorf("expected %s, parent of %s, to be *Block but is %T", ancestor.ID(), b.ID(), ancestorInf)
-	}
-	if bonusBlocks.Contains(b.id) {
-		log.Info("skipping atomic tx verification on bonus block", "block", b.id)
-		return nil
-	}
-
-	// If the tx is an atomic tx, ensure that it doesn't conflict with any of
-	// its processing ancestry.
-	inputs := &ids.Set{}
-	for _, atomicTx := range b.atomicTxs {
-		utx := atomicTx.UnsignedAtomicTx
-		if err := utx.SemanticVerify(b.vm, atomicTx, ancestor, b.ethBlock.BaseFee(), rules); err != nil {
-			return fmt.Errorf("invalid block due to failed semanatic verify: %w at height %d", err, b.Height())
-		}
-		txInputs := utx.InputUTXOs()
-		if inputs.Overlaps(txInputs) {
-			return errConflictingAtomicInputs
-		}
-		inputs.Union(txInputs)
-	}
-	return nil
+	return err
 }
 
 // Bytes implements the snowman.Block interface

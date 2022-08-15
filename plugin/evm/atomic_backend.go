@@ -31,12 +31,11 @@ type AtomicBackend interface {
 	// InsertTxs calculates the root of the atomic trie that would
 	// result from applying [txs] to the atomic trie, starting at the state
 	// corresponding to previously verified block [parentHash].
-	// If [blockHash] is provided and [writes] is set to true,
-	// the modified atomic trie is pinned in memory and it's the caller's
-	// responsibility to call either Accept or Reject on the AtomicState
-	// which can be retreived from GetVerifiedAtomicState to commit the
+	// If [blockHash] is provided, the modified atomic trie is pinned in memory
+	// and it's the caller's responsibility to call either Accept or Reject on
+	// the AtomicState which can be retreived from GetVerifiedAtomicState to commit the
 	// changes or abort them and free memory.
-	InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx, writes bool) (common.Hash, error)
+	InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error)
 
 	// Returns an AtomicState corresponding to a block hash that has been inserted
 	// but not Accepted or Rejected yet.
@@ -65,6 +64,9 @@ type AtomicBackend interface {
 
 	// SetLastAccepted is used after state-sync to reset the last accepted block.
 	SetLastAccepted(lastAcceptedHash common.Hash)
+
+	// IsBonus returns true if the block for atomicState is a bonus block
+	IsBonus(blockHeight uint64, blockHash common.Hash) bool
 }
 
 // AtomicState is an abstraction created through AtomicBackend
@@ -376,13 +378,14 @@ func (a *atomicBackend) SetLastAccepted(lastAcceptedHash common.Hash) {
 	a.lastAcceptedHash = lastAcceptedHash
 }
 
-// InsertTxs returns an AtomicState that can be used to transition the VM's
-// atomic state by applying [txs] to the atomic trie, starting at the state
+// InsertTxs calculates the root of the atomic trie that would
+// result from applying [txs] to the atomic trie, starting at the state
 // corresponding to previously verified block [parentHash].
-// The modified atomic trie is pinned in memory and it's the caller's
-// responsibility to call either Accept or Reject on the returned AtomicState
-// to commit the changes or abort them and free memory.
-func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx, writes bool) (common.Hash, error) {
+// If [blockHash] is provided, the modified atomic trie is pinned in memory
+// and it's the caller's responsibility to call either Accept or Reject on
+// the AtomicState which can be retreived from GetVerifiedAtomicState to commit the
+// changes or abort them and free memory.
+func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, parentHash common.Hash, txs []*Tx) (common.Hash, error) {
 	// access the atomic trie at the parent block
 	parentRoot, err := a.getAtomicRootAt(parentHash)
 	if err != nil {
@@ -403,7 +406,7 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 	}
 
 	// if we are not pinning the atomic trie in memory, we can return early
-	if blockHash == (common.Hash{}) || !writes {
+	if blockHash == (common.Hash{}) {
 		return tr.Hash(), nil
 	}
 
@@ -428,8 +431,8 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 	return root, nil
 }
 
-// isBonus returns true if the block for atomicState is a bonus block
-func (a *atomicBackend) isBonus(blockHeight uint64, blockHash common.Hash) bool {
+// IsBonus returns true if the block for atomicState is a bonus block
+func (a *atomicBackend) IsBonus(blockHeight uint64, blockHash common.Hash) bool {
 	if bonusID, found := a.bonusBlocks[blockHeight]; found {
 		return bonusID == ids.ID(blockHash)
 	}
@@ -459,7 +462,7 @@ func (a *atomicState) Root() common.Hash {
 func (a *atomicState) Accept(commitBatch database.Batch) error {
 	// Update the atomic tx repository. Note it is necessary to invoke
 	// the correct method taking bonus blocks into consideration.
-	if a.backend.isBonus(a.blockHeight, a.blockHash) {
+	if a.backend.IsBonus(a.blockHeight, a.blockHash) {
 		if err := a.backend.repo.WriteBonus(a.blockHeight, a.txs); err != nil {
 			return err
 		}
@@ -487,7 +490,7 @@ func (a *atomicState) Accept(commitBatch database.Batch) error {
 
 	// If this is a bonus block, write [commitBatch] without applying atomic ops
 	// to shared memory.
-	if a.backend.isBonus(a.blockHeight, a.blockHash) {
+	if a.backend.IsBonus(a.blockHeight, a.blockHash) {
 		log.Info("skipping atomic tx acceptance on bonus block", "block", a.blockHash)
 		return atomic.WriteAll(commitBatch, atomicChangesBatch)
 	}
