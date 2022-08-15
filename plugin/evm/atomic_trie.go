@@ -33,10 +33,9 @@ const (
 )
 
 var (
-	_                            AtomicTrie         = &atomicTrie{}
-	_                            AtomicTrieSnapshot = &atomicTrieSnapshot{}
-	lastCommittedKey                                = []byte("atomicTrieLastCommittedBlock")
-	appliedSharedMemoryCursorKey                    = []byte("atomicTrieLastAppliedToSharedMemory")
+	_                            AtomicTrie = &atomicTrie{}
+	lastCommittedKey                        = []byte("atomicTrieLastCommittedBlock")
+	appliedSharedMemoryCursorKey            = []byte("atomicTrieLastAppliedToSharedMemory")
 )
 
 // AtomicTrie maintains an index of atomic operations by blockchainIDs for every block
@@ -47,7 +46,10 @@ var (
 type AtomicTrie interface {
 	// OpenTrie returns a modifiable instance of the atomic trie backed by trieDB
 	// opened at hash.
-	OpenTrie(hash common.Hash) (AtomicTrieSnapshot, error)
+	OpenTrie(hash common.Hash) (*trie.Trie, error)
+
+	// UpdateTrie updates [tr] to inlude atomicOps for height.
+	UpdateTrie(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error
 
 	// Iterator returns an AtomicTrieIterator to iterate the trie at the given
 	// root hash starting at [cursor].
@@ -84,8 +86,6 @@ type AtomicTrie interface {
 // TODO: rename this
 // AtomicTrieSnapshot represents a modifyable atomic trie
 type AtomicTrieSnapshot interface {
-	// UpdateTrie updates the trie to inlude atomicOps for height.
-	UpdateTrie(height uint64, atomicOps map[ids.ID]*atomic.Requests) error
 
 	// TryUpdate updates the underlying trie with the raw key/value bytes.
 	// Used in syncing.
@@ -212,23 +212,16 @@ func nearestCommitHeight(blockNumber uint64, commitInterval uint64) uint64 {
 	return blockNumber - (blockNumber % commitInterval)
 }
 
-func (a *atomicTrie) OpenTrie(root common.Hash) (AtomicTrieSnapshot, error) {
-	tr, err := trie.New(common.Hash{}, root, a.trieDB)
-	if err != nil {
-		return nil, err
-	}
-	return &atomicTrieSnapshot{
-		trie:       tr,
-		atomicTrie: a,
-	}, nil
+func (a *atomicTrie) OpenTrie(root common.Hash) (*trie.Trie, error) {
+	return trie.New(common.Hash{}, root, a.trieDB)
 }
 
 // Index updates the trie with entries in atomicOps
 // This function updates the following:
 // - heightBytes => trie root hash (if the trie was committed)
 // - lastCommittedBlock => height (if the trie was committed)
-func (a *atomicTrie) index(snapshot AtomicTrieSnapshot, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
-	if err := snapshot.UpdateTrie(height, atomicOps); err != nil {
+func (a *atomicTrie) index(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
+	if err := a.UpdateTrie(tr, height, atomicOps); err != nil {
 		return err
 	}
 
@@ -236,7 +229,7 @@ func (a *atomicTrie) index(snapshot AtomicTrieSnapshot, height uint64, atomicOps
 		return nil
 	}
 
-	root, err := snapshot.Commit()
+	root, _, err := tr.Commit(nil)
 	if err != nil {
 		return err
 	}
@@ -253,9 +246,9 @@ func (a *atomicTrie) commit(height uint64, root common.Hash) error {
 	return a.updateLastCommitted(root, height)
 }
 
-func (a *atomicTrieSnapshot) UpdateTrie(height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
+func (a *atomicTrie) UpdateTrie(trie *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
 	for blockchainID, requests := range atomicOps {
-		valueBytes, err := a.atomicTrie.codec.Marshal(codecVersion, requests)
+		valueBytes, err := a.codec.Marshal(codecVersion, requests)
 		if err != nil {
 			// highly unlikely but possible if atomic.Element
 			// has a change that is unsupported by the codec
@@ -266,25 +259,12 @@ func (a *atomicTrieSnapshot) UpdateTrie(height uint64, atomicOps map[ids.ID]*ato
 		keyPacker := wrappers.Packer{Bytes: make([]byte, atomicKeyLength)}
 		keyPacker.PackLong(height)
 		keyPacker.PackFixedBytes(blockchainID[:])
-		if err := a.trie.TryUpdate(keyPacker.Bytes, valueBytes); err != nil {
+		if err := trie.TryUpdate(keyPacker.Bytes, valueBytes); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-func (a *atomicTrieSnapshot) Root() common.Hash {
-	return a.trie.Hash()
-}
-
-func (a *atomicTrieSnapshot) Commit() (common.Hash, error) {
-	root, _, err := a.trie.Commit(nil)
-	return root, err
-}
-
-func (a *atomicTrieSnapshot) TryUpdate(key []byte, val []byte) error {
-	return a.trie.TryUpdate(key, val)
 }
 
 // LastCommitted returns the last committed trie hash and last committed height

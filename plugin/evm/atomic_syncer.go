@@ -14,6 +14,7 @@ import (
 
 	"github.com/ava-labs/coreth/plugin/evm/message"
 	syncclient "github.com/ava-labs/coreth/sync/client"
+	"github.com/ava-labs/coreth/trie"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -28,7 +29,7 @@ var (
 type atomicSyncer struct {
 	db                 *versiondb.Database
 	atomicTrie         AtomicTrie
-	atomicTrieSnapshot AtomicTrieSnapshot // used to update the atomic trie
+	atomicTrieSnapshot *trie.Trie // used to update the atomic trie
 	targetRoot         common.Hash
 	targetHeight       uint64
 
@@ -88,7 +89,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 		// key = height + blockchainID
 		height := binary.BigEndian.Uint64(key[:wrappers.LongLen])
 		if height > lastHeight {
-			root, err := s.atomicTrieSnapshot.Commit()
+			root, _, err := s.atomicTrieSnapshot.Commit(nil)
 			if err != nil {
 				return err
 			}
@@ -122,7 +123,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 // commit the trie to disk and perform the final checks that we synced the target root correctly.
 func (s *atomicSyncer) onFinish() error {
 	// commit the trie on finish
-	root, err := s.atomicTrieSnapshot.Commit()
+	root, _, err := s.atomicTrieSnapshot.Commit(nil)
 	if err != nil {
 		return err
 	}

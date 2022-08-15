@@ -35,7 +35,7 @@ func TestIteratorCanIterate(t *testing.T) {
 
 	// create an atomic trie
 	// on create it will initialize all the transactions from the above atomic repository
-	atomicBackend, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, 100, nil)
+	atomicBackend, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, common.Hash{}, 100)
 	assert.NoError(t, err)
 	atomicTrie1 := atomicBackend.AtomicTrie()
 
@@ -48,7 +48,7 @@ func TestIteratorCanIterate(t *testing.T) {
 
 	// iterate on a new atomic trie to make sure there is no resident state affecting the data and the
 	// iterator
-	atomicBackend2, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, 100, nil)
+	atomicBackend2, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, common.Hash{}, 100)
 	assert.NoError(t, err)
 	atomicTrie2 := atomicBackend2.AtomicTrie()
 	lastCommittedHash2, lastCommittedHeight2 := atomicTrie2.LastCommitted()
@@ -74,7 +74,7 @@ func TestIteratorHandlesInvalidData(t *testing.T) {
 
 	// create an atomic trie
 	// on create it will initialize all the transactions from the above atomic repository
-	atomicBackend, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, 100, nil)
+	atomicBackend, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, lastAcceptedHeight, common.Hash{}, 100)
 	assert.NoError(t, err)
 	atomicTrie := atomicBackend.AtomicTrie().(*atomicTrie)
 
@@ -93,7 +93,7 @@ func TestIteratorHandlesInvalidData(t *testing.T) {
 	}
 	assert.NoError(t, atomicTrieSnapshot.TryUpdate(utils.RandomBytes(50), utils.RandomBytes(50)))
 
-	nextRoot, err := atomicTrieSnapshot.Commit()
+	nextRoot, _, err := atomicTrieSnapshot.Commit(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

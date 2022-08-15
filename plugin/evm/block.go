@@ -111,8 +111,6 @@ type Block struct {
 	vm        *VM
 	status    choices.Status
 	atomicTxs []*Tx
-
-	atomicState AtomicState
 }
 
 // newBlock returns a new Block wrapping the ethBlock type and implementing the snowman.Block interface
@@ -158,7 +156,12 @@ func (b *Block) Accept() error {
 
 	// Update VM state for atomic txs in this block. This includes updating the
 	// atomic tx repo, atomic trie, and shared memory.
-	return b.atomicState.Accept()
+	atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(common.Hash(b.ID()))
+	if err != nil {
+		// should never occur since [b] must be verified before calling Accept
+		return err
+	}
+	return atomicState.Accept()
 }
 
 // Reject implements the snowman.Block interface
@@ -225,12 +228,22 @@ func (b *Block) verify(writes bool) error {
 		return err
 	}
 
-	b.atomicState, err = b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs)
+	if !writes {
+		// if there are no writes, we can skip modifying the atomic state.
+		return b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
+	}
+
+	atomicState, err := b.vm.atomicBackend.InsertTxs(b.ethBlock.Hash(), b.Height(), b.ethBlock.ParentHash(), b.atomicTxs)
 	if err != nil {
 		return err
 	}
+	if err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes); err != nil {
+		// unpin atomicState from memory if block insertion fails
+		_ = atomicState.Reject() // ignore error to return first error instead
+		return err
+	}
 
-	return b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
+	return nil
 }
 
 func (b *Block) verifyAtomicTxs(rules params.Rules) error {
