@@ -1349,13 +1349,13 @@ func (vm *VM) verifyTx(tx *Tx, parentHash common.Hash, baseFee *big.Int, state *
 
 // verifyTxs verifies that [txs] are valid to be issued into a block with parent block [parentHash]
 // using [rules] as the current rule set.
-func (vm *VM) verifyTxs(txs []*Tx, ancestorHash common.Hash, baseFee *big.Int, height uint64, rules params.Rules) error {
+func (vm *VM) verifyTxs(txs []*Tx, parentHash common.Hash, baseFee *big.Int, height uint64, rules params.Rules) error {
 	// Ensure that the parent was verified and inserted correctly.
-	if !vm.blockChain.HasBlock(ancestorHash, height-1) {
+	if !vm.blockChain.HasBlock(parentHash, height-1) {
 		return errRejectedParent
 	}
 
-	ancestorID := ids.ID(ancestorHash)
+	ancestorID := ids.ID(parentHash)
 	// If the ancestor is unknown, then the parent failed verification when
 	// it was called.
 	// If the ancestor is rejected, then this block shouldn't be inserted

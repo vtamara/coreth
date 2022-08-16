@@ -178,7 +178,7 @@ func (b *Block) Reject() error {
 	}
 	atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(common.Hash(b.ID()))
 	if err != nil {
-		// should never occur since [b] must be verified before calling Accept
+		// should never occur since [b] must be verified before calling Reject
 		return err
 	}
 	if err := atomicState.Reject(); err != nil {
