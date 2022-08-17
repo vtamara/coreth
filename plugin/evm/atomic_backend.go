@@ -348,7 +348,7 @@ func (a *atomicBackend) GetVerifiedAtomicState(blockHash common.Hash) (AtomicSta
 	if state, ok := a.verifiedRoots[blockHash]; ok {
 		return state, nil
 	}
-	return nil, fmt.Errorf("attempt to access atomic state for an invalid block: %s", blockHash)
+	return nil, fmt.Errorf("cannot access atomic state for block %s", blockHash)
 }
 
 // getAtomicRootAt returns the atomic trie root for a block that is either:
