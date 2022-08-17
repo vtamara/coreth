@@ -193,24 +193,17 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		if err := a.atomicTrie.InsertTrie(root); err != nil {
 			return err
 		}
-		if err := a.atomicTrie.AcceptTrie(height, root); err != nil {
+		isCommit, err := a.atomicTrie.AcceptTrie(height, root)
+		if err != nil {
 			return err
 		}
-		// If accepting this root caused a commit, also
-		// flush pending changes from versiondb to disk
-		// to preserve progress.
-		newCommitRoot, newCommitHeight := a.atomicTrie.LastCommitted()
-		if newCommitHeight > lastCommittedHeight {
+		if isCommit {
 			if err := a.db.Commit(); err != nil {
 				return err
 			}
-
-			lastCommittedHeight = newCommitHeight
-			lastCommittedRoot = newCommitRoot
 		}
 
 		heightsIndexed++
-
 		if time.Since(lastUpdate) > progressLogUpdate {
 			log.Info("imported entries into atomic trie", "heightsIndexed", heightsIndexed)
 			lastUpdate = time.Now()
@@ -226,11 +219,12 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		if err := a.atomicTrie.InsertTrie(lastAcceptedRoot); err != nil {
 			return err
 		}
-		if err := a.atomicTrie.AcceptTrie(lastAcceptedHeight, lastAcceptedRoot); err != nil {
+		if _, err := a.atomicTrie.AcceptTrie(lastAcceptedHeight, lastAcceptedRoot); err != nil {
 			return err
 		}
 	}
 
+	lastCommittedRoot, lastCommittedHeight = a.atomicTrie.LastCommitted()
 	log.Info(
 		"finished initializing atomic trie",
 		"lastAcceptedHeight", lastAcceptedHeight,
@@ -473,7 +467,7 @@ func (a *atomicState) Accept(commitBatch database.Batch) error {
 	}
 
 	// Accept the root of this atomic trie (will be persisted if at a commit interval)
-	if err := a.backend.atomicTrie.AcceptTrie(a.blockHeight, a.atomicRoot); err != nil {
+	if _, err := a.backend.atomicTrie.AcceptTrie(a.blockHeight, a.atomicRoot); err != nil {
 		return err
 	}
 	// Update the last accepted block to this block and remove it from

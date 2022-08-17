@@ -96,18 +96,14 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 			if err := s.atomicTrie.InsertTrie(root); err != nil {
 				return err
 			}
-			if err := s.atomicTrie.AcceptTrie(lastHeight, root); err != nil {
+			isCommit, err := s.atomicTrie.AcceptTrie(lastHeight, root)
+			if err != nil {
 				return err
 			}
-			// If accepting this root caused a commit, also
-			// flush pending changes from versiondb to disk
-			// to preserve progress.
-			_, newCommitHeight := s.atomicTrie.LastCommitted()
-			if newCommitHeight > lastCommittedHeight {
+			if isCommit {
 				if err := s.db.Commit(); err != nil {
 					return err
 				}
-				lastCommittedHeight = newCommitHeight
 			}
 			lastHeight = height
 		}
@@ -130,7 +126,7 @@ func (s *atomicSyncer) onFinish() error {
 	if err := s.atomicTrie.InsertTrie(root); err != nil {
 		return err
 	}
-	if err := s.atomicTrie.AcceptTrie(s.targetHeight, root); err != nil {
+	if _, err := s.atomicTrie.AcceptTrie(s.targetHeight, root); err != nil {
 		return err
 	}
 	if err := s.db.Commit(); err != nil {

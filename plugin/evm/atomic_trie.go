@@ -76,8 +76,8 @@ type AtomicTrie interface {
 
 	// AcceptTrie marks root as the last accepted atomic trie root, and
 	// commits the trie to persistent storage if height is divisible by
-	// the commit interval.
-	AcceptTrie(height uint64, root common.Hash) error
+	// the commit interval. Returns true if the trie was committed.
+	AcceptTrie(height uint64, root common.Hash) (bool, error)
 
 	// RejectTrie dereferences root from the trieDB, freeing memory.
 	RejectTrie(root common.Hash) error
@@ -336,15 +336,19 @@ func (a *atomicTrie) InsertTrie(root common.Hash) error {
 	return nil
 }
 
-func (a *atomicTrie) AcceptTrie(height uint64, root common.Hash) error {
+// AcceptTrie commits the triedb at [root] if needed and returns true if a commit
+// was performed.
+func (a *atomicTrie) AcceptTrie(height uint64, root common.Hash) (bool, error) {
 	// Check whether we have crossed over a commitHeight.
 	// If so, make a commit with the last accepted root.
+	hasCommitted := false
 	commitHeight := nearestCommitHeight(height, a.commitInterval)
 	for commitHeight > a.lastCommittedHeight && height > commitHeight {
 		nextCommitHeight := a.lastCommittedHeight + a.commitInterval
 		if err := a.commit(nextCommitHeight, a.lastAcceptedRoot); err != nil {
-			return err
+			return false, err
 		}
+		hasCommitted = true
 	}
 
 	// Attempt to dereference roots at least [tipBufferSize] old
@@ -356,12 +360,13 @@ func (a *atomicTrie) AcceptTrie(height uint64, root common.Hash) error {
 	// Commit this root if we have reached the [commitInterval].
 	if commitHeight == height {
 		if err := a.commit(height, root); err != nil {
-			return err
+			return false, err
 		}
+		hasCommitted = true
 	}
 
 	a.lastAcceptedRoot = root
-	return nil
+	return hasCommitted, nil
 }
 
 func (a *atomicTrie) RejectTrie(root common.Hash) error {
