@@ -238,10 +238,7 @@ func (b *Block) verify(writes bool) error {
 		// or if we are not pinning to memory, unpin the atomic trie
 		// changes from memory (if they were pinned).
 		if atomicState, err := b.vm.atomicBackend.GetVerifiedAtomicState(b.ethBlock.Hash()); err == nil {
-			if err := atomicState.Reject(); err != nil {
-				// Log this error so we can return the original error instead.
-				log.Warn("error unpinning atomic trie changes", "block", b.ethBlock.Hash(), "err", err)
-			}
+			_ = atomicState.Reject() // ignore this error so we can return the original error instead.
 		}
 	}
 	return err
