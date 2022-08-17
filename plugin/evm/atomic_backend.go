@@ -399,7 +399,7 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 		return common.Hash{}, err
 	}
 
-	// if we are not pinning the atomic trie in memory, we can return early
+	// If block hash is not provided, we do not pin the atomic state in memory and can return early
 	if blockHash == (common.Hash{}) {
 		return tr.Hash(), nil
 	}
