@@ -362,7 +362,7 @@ func (a *atomicBackend) getAtomicRootAt(blockHash common.Hash) (common.Hash, err
 	}
 	state, err := a.GetVerifiedAtomicState(blockHash)
 	if err != nil {
-		return common.Hash{}, nil
+		return common.Hash{}, err
 	}
 	return state.Root(), nil
 }
