@@ -89,6 +89,8 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 		// key = height + blockchainID
 		height := binary.BigEndian.Uint64(key[:wrappers.LongLen])
 		if height > lastHeight {
+			// If this key belongs to a new height, we commit
+			// the trie at the previous height before adding this key.
 			root, _, err := s.trie.Commit(nil)
 			if err != nil {
 				return err
@@ -96,11 +98,15 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 			if err := s.atomicTrie.InsertTrie(root); err != nil {
 				return err
 			}
+			// AcceptTrie commits the trieDB and returns [isCommit] as true
+			// if we have reached or crossed a commit interval.
 			isCommit, err := s.atomicTrie.AcceptTrie(lastHeight, root)
 			if err != nil {
 				return err
 			}
 			if isCommit {
+				// Flush pending changes to disk to preserve progress and
+				// free up memory if the trieDB was committed.
 				if err := s.db.Commit(); err != nil {
 					return err
 				}
