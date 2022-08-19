@@ -93,7 +93,7 @@ func TestIteratorHandlesInvalidData(t *testing.T) {
 	}
 	assert.NoError(t, atomicTrieSnapshot.TryUpdate(utils.RandomBytes(50), utils.RandomBytes(50)))
 
-	nextRoot, _, err := atomicTrieSnapshot.Commit(nil)
+	nextRoot, _, err := atomicTrieSnapshot.Commit(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -186,7 +186,7 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		if err := a.atomicTrie.UpdateTrie(tr, height, combinedOps); err != nil {
 			return err
 		}
-		root, _, err := tr.Commit(nil)
+		root, _, err := tr.Commit(nil, false)
 		if err != nil {
 			return err
 		}
@@ -405,7 +405,7 @@ func (a *atomicBackend) InsertTxs(blockHash common.Hash, blockHeight uint64, par
 	}
 
 	// get the new root and pin the atomic trie changes in memory.
-	root, _, err := tr.Commit(nil)
+	root, _, err := tr.Commit(nil, false)
 	if err != nil {
 		return common.Hash{}, err
 	}

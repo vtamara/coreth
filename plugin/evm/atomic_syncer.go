@@ -91,7 +91,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 		if height > lastHeight {
 			// If this key belongs to a new height, we commit
 			// the trie at the previous height before adding this key.
-			root, _, err := s.trie.Commit(nil)
+			root, _, err := s.trie.Commit(nil, false)
 			if err != nil {
 				return err
 			}
@@ -125,7 +125,7 @@ func (s *atomicSyncer) onLeafs(keys [][]byte, values [][]byte) error {
 // commit the trie to disk and perform the final checks that we synced the target root correctly.
 func (s *atomicSyncer) onFinish() error {
 	// commit the trie on finish
-	root, _, err := s.trie.Commit(nil)
+	root, _, err := s.trie.Commit(nil, false)
 	if err != nil {
 		return err
 	}
