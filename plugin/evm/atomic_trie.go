@@ -206,7 +206,7 @@ func (a *atomicTrie) index(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*a
 		return nil
 	}
 
-	root, _, err := tr.Commit(nil)
+	root, _, err := tr.Commit(nil, false)
 	if err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func (a *atomicTrie) LastAcceptedRoot() common.Hash {
 }
 
 func (a *atomicTrie) InsertTrie(root common.Hash) error {
-	a.trieDB.Reference(root, common.Hash{})
+	a.trieDB.Reference(root, common.Hash{}, true)
 
 	// The use of [Cap] in [insertTrie] prevents exceeding the configured memory
 	// limit (and OOM) in case there is a large backlog of processing (unaccepted) blocks.
