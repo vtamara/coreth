@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	progressLogUpdate          = 30 * time.Second
+	progressLogFrequency       = 30 * time.Second
 	atomicKeyLength            = wrappers.LongLen + common.HashLength
 	sharedMemoryApplyBatchSize = 10_000 // specifies the number of atomic operations to batch progress updates
 

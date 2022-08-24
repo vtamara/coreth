@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ava-labs/avalanchego/chains/atomic"
-	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/database/versiondb"
@@ -20,10 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-var (
-	_ AtomicBackend = &atomicBackend{}
-	_ AtomicState   = &atomicState{}
-)
+var _ AtomicBackend = &atomicBackend{}
 
 // AtomicBackend abstracts the verification and processing
 // of atomic transactions
@@ -67,37 +63,6 @@ type AtomicBackend interface {
 
 	// IsBonus returns true if the block for atomicState is a bonus block
 	IsBonus(blockHeight uint64, blockHash common.Hash) bool
-}
-
-// AtomicState is an abstraction created through AtomicBackend
-// and can be used to apply the VM's state change for atomic txs
-// or reject them to free memory.
-// The root of the atomic trie after applying the state change
-// is accessible through this interface as well.
-type AtomicState interface {
-	// Root of the atomic trie after applying the state change.
-	Root() common.Hash
-	// Accept applies the state change to VM's persistent storage
-	// Changes are persisted atomically along with the provided [commitBatch].
-	Accept(commitBatch database.Batch) error
-	// Reject frees memory associated with the state change.
-	Reject() error
-}
-
-// atomicBackend implements the AtomicBackend interface using
-// the AtomicTrie, AtomicTxRepository, and the VM's shared memory.
-type atomicBackend struct {
-	codec        codec.Manager
-	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
-	db           *versiondb.Database // Underlying database
-	metadataDB   database.Database   // Underlying database containing the atomic trie metadata
-	sharedMemory atomic.SharedMemory
-
-	repo       AtomicTxRepository
-	atomicTrie AtomicTrie
-
-	lastAcceptedHash common.Hash
-	verifiedRoots    map[common.Hash]AtomicState
 }
 
 // NewAtomicBackend creates an AtomicBackend from the specified dependencies
@@ -179,7 +144,7 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 			return err
 		}
 
-		if _, skipBonusBlock := a.bonusBlocks[height]; skipBonusBlock {
+		if _, found := a.bonusBlocks[height]; found {
 			// If [height] is a bonus block, do not index the atomic operations into the trie
 			continue
 		}
@@ -204,7 +169,7 @@ func (a *atomicBackend) initialize(lastAcceptedHeight uint64) error {
 		}
 
 		heightsIndexed++
-		if time.Since(lastUpdate) > progressLogUpdate {
+		if time.Since(lastUpdate) > progressLogFrequency {
 			log.Info("imported entries into atomic trie", "heightsIndexed", heightsIndexed)
 			lastUpdate = time.Now()
 		}
@@ -257,9 +222,12 @@ func (a *atomicBackend) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 	if err != nil {
 		return err
 	}
-	lastUpdate := time.Now()
-	putRequests, removeRequests := 0, 0
-	totalPutRequests, totalRemoveRequests := 0, 0
+
+	var (
+		lastUpdate                            = time.Now()
+		putRequests, removeRequests           = 0, 0
+		totalPutRequests, totalRemoveRequests = 0, 0
+	)
 
 	// value of sharedMemoryCursor is either a uint64 signifying the
 	// height iteration should begin at or is a uint64+blockchainID
@@ -284,7 +252,7 @@ func (a *atomicBackend) ApplyToSharedMemory(lastAcceptedBlock uint64) error {
 		removeRequests += len(atomicOps.RemoveRequests)
 		totalPutRequests += len(atomicOps.PutRequests)
 		totalRemoveRequests += len(atomicOps.RemoveRequests)
-		if time.Since(lastUpdate) > 10*time.Second {
+		if time.Since(lastUpdate) > progressLogFrequency {
 			log.Info("atomic trie iteration", "height", height, "puts", totalPutRequests, "removes", totalRemoveRequests)
 			lastUpdate = time.Now()
 		}
@@ -435,69 +403,4 @@ func (a *atomicBackend) IsBonus(blockHeight uint64, blockHash common.Hash) bool 
 
 func (a *atomicBackend) AtomicTrie() AtomicTrie {
 	return a.atomicTrie
-}
-
-// atomicState implements the AtomicState interface using
-// a pointer to the atomicBackend.
-type atomicState struct {
-	backend     *atomicBackend
-	blockHash   common.Hash
-	blockHeight uint64
-	txs         []*Tx
-	atomicOps   map[ids.ID]*atomic.Requests
-	atomicRoot  common.Hash
-}
-
-func (a *atomicState) Root() common.Hash {
-	return a.atomicRoot
-}
-
-// Accept applies the state change to VM's persistent storage.
-func (a *atomicState) Accept(commitBatch database.Batch) error {
-	// Update the atomic tx repository. Note it is necessary to invoke
-	// the correct method taking bonus blocks into consideration.
-	if a.backend.IsBonus(a.blockHeight, a.blockHash) {
-		if err := a.backend.repo.WriteBonus(a.blockHeight, a.txs); err != nil {
-			return err
-		}
-	} else {
-		if err := a.backend.repo.Write(a.blockHeight, a.txs); err != nil {
-			return err
-		}
-	}
-
-	// Accept the root of this atomic trie (will be persisted if at a commit interval)
-	if _, err := a.backend.atomicTrie.AcceptTrie(a.blockHeight, a.atomicRoot); err != nil {
-		return err
-	}
-	// Update the last accepted block to this block and remove it from
-	// the map tracking undecided blocks.
-	a.backend.lastAcceptedHash = a.blockHash
-	delete(a.backend.verifiedRoots, a.blockHash)
-
-	// get changes from the atomic trie and repository in a batch
-	// to be committed atomically with [commitBatch] and shared memory.
-	atomicChangesBatch, err := a.backend.db.CommitBatch()
-	if err != nil {
-		return fmt.Errorf("could not create commit batch in atomicState accept: %w", err)
-	}
-
-	// If this is a bonus block, write [commitBatch] without applying atomic ops
-	// to shared memory.
-	if a.backend.IsBonus(a.blockHeight, a.blockHash) {
-		log.Info("skipping atomic tx acceptance on bonus block", "block", a.blockHash)
-		return atomic.WriteAll(commitBatch, atomicChangesBatch)
-	}
-
-	// Otherwise, atomically commit pending changes in the version db with
-	// atomic ops to shared memory.
-	return a.backend.sharedMemory.Apply(a.atomicOps, commitBatch, atomicChangesBatch)
-}
-
-// Reject frees memory associated with the state change.
-func (a *atomicState) Reject() error {
-	// Remove the block from the map of undecided blocks.
-	delete(a.backend.verifiedRoots, a.blockHash)
-	// Unpin the rejected atomic trie root from memory.
-	return a.backend.atomicTrie.RejectTrie(a.atomicRoot)
 }
