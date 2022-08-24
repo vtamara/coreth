@@ -7,9 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ava-labs/avalanchego/chains/atomic"
-	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database"
-	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -30,22 +28,6 @@ type AtomicState interface {
 	Accept(commitBatch database.Batch) error
 	// Reject frees memory associated with the state change.
 	Reject() error
-}
-
-// atomicBackend implements the AtomicBackend interface using
-// the AtomicTrie, AtomicTxRepository, and the VM's shared memory.
-type atomicBackend struct {
-	codec        codec.Manager
-	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
-	db           *versiondb.Database // Underlying database
-	metadataDB   database.Database   // Underlying database containing the atomic trie metadata
-	sharedMemory atomic.SharedMemory
-
-	repo       AtomicTxRepository
-	atomicTrie AtomicTrie
-
-	lastAcceptedHash common.Hash
-	verifiedRoots    map[common.Hash]AtomicState
 }
 
 // atomicState implements the AtomicState interface using

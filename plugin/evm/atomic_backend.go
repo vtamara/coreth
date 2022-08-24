@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ava-labs/avalanchego/chains/atomic"
+	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/database/versiondb"
@@ -63,6 +64,22 @@ type AtomicBackend interface {
 
 	// IsBonus returns true if the block for atomicState is a bonus block
 	IsBonus(blockHeight uint64, blockHash common.Hash) bool
+}
+
+// atomicBackend implements the AtomicBackend interface using
+// the AtomicTrie, AtomicTxRepository, and the VM's shared memory.
+type atomicBackend struct {
+	codec        codec.Manager
+	bonusBlocks  map[uint64]ids.ID   // Map of height to blockID for blocks to skip indexing
+	db           *versiondb.Database // Underlying database
+	metadataDB   database.Database   // Underlying database containing the atomic trie metadata
+	sharedMemory atomic.SharedMemory
+
+	repo       AtomicTxRepository
+	atomicTrie AtomicTrie
+
+	lastAcceptedHash common.Hash
+	verifiedRoots    map[common.Hash]AtomicState
 }
 
 // NewAtomicBackend creates an AtomicBackend from the specified dependencies

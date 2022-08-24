@@ -34,6 +34,27 @@ func (tx *Tx) mustAtomicOps() map[ids.ID]*atomic.Requests {
 	return map[ids.ID]*atomic.Requests{id: reqs}
 }
 
+// index updates the trie with entries in atomicOps
+// This function updates the following:
+// - heightBytes => trie root hash (if the trie was committed)
+// - lastCommittedBlock => height (if the trie was committed)
+func (a *atomicTrie) index(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
+	if err := a.UpdateTrie(tr, height, atomicOps); err != nil {
+		return err
+	}
+
+	if height%a.commitInterval != 0 {
+		return nil
+	}
+
+	root, _, err := tr.Commit(nil, false)
+	if err != nil {
+		return err
+	}
+
+	return a.commit(height, root)
+}
+
 func TestNearestCommitHeight(t *testing.T) {
 	type test struct {
 		height, commitInterval, expectedCommitHeight uint64

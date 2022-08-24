@@ -130,6 +130,10 @@ func newAtomicTrie(
 	if err != nil {
 		return nil, err
 	}
+	// initialize to EmptyRootHash if there is no committed root.
+	if root == (common.Hash{}) {
+		root = types.EmptyRootHash
+	}
 	// If the last committed height is above the last accepted height, then we fall back to
 	// the last commit below the last accepted height.
 	if height > lastAcceptedHeight {
@@ -157,7 +161,11 @@ func newAtomicTrie(
 		lastCommittedHeight: height,
 		tipBuffer:           core.NewBoundedBuffer(atomicTrieTipBufferSize, trieDB.Dereference),
 		memoryCap:           atomicTrieMemoryCap,
-		lastAcceptedRoot:    types.EmptyRootHash,
+		// Initialize lastAcceptedRoot to the last committed root.
+		// If there were further blocks processed (ahead of the commit interval),
+		// AtomicBackend will call InsertTrie/AcceptTrie on atomic ops
+		// for those blocks.
+		lastAcceptedRoot: root,
 	}, nil
 }
 
@@ -191,27 +199,6 @@ func nearestCommitHeight(blockNumber uint64, commitInterval uint64) uint64 {
 
 func (a *atomicTrie) OpenTrie(root common.Hash) (*trie.Trie, error) {
 	return trie.New(common.Hash{}, root, a.trieDB)
-}
-
-// Index updates the trie with entries in atomicOps
-// This function updates the following:
-// - heightBytes => trie root hash (if the trie was committed)
-// - lastCommittedBlock => height (if the trie was committed)
-func (a *atomicTrie) index(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
-	if err := a.UpdateTrie(tr, height, atomicOps); err != nil {
-		return err
-	}
-
-	if height%a.commitInterval != 0 {
-		return nil
-	}
-
-	root, _, err := tr.Commit(nil, false)
-	if err != nil {
-		return err
-	}
-
-	return a.commit(height, root)
 }
 
 // commit calls commit on the underlying trieDB and updates metadata pointers.
