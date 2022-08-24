@@ -162,18 +162,26 @@ func TestAtomicTrieInitialize(t *testing.T) {
 			// Verify the operations up to the expected commit height
 			verifyOperations(t, atomicTrie1, codec, rootHash1, 1, test.expectedCommitHeight, operationsMap)
 
-			// Construct the atomic trie a second time and ensure that it produces the same hash
-			atomicBackend2, err := NewAtomicBackend(
+			// Construct the atomic trie again (on the same database) and ensure the last accepted root is correct.
+			atomicBackend2, err := NewAtomicBackend(db, testSharedMemory(), nil, repo, test.lastAcceptedHeight, common.Hash{}, test.commitInterval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			atomicTrie2 := atomicBackend2.AtomicTrie()
+			assert.Equal(t, atomicTrie1.LastAcceptedRoot(), atomicTrie2.LastAcceptedRoot())
+
+			// Construct the atomic trie again (on an empty database) and ensure that it produces the same hash.
+			atomicBackend3, err := NewAtomicBackend(
 				versiondb.New(memdb.New()), testSharedMemory(), nil, repo, test.lastAcceptedHeight, common.Hash{}, test.commitInterval,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			atomicTrie2 := atomicBackend2.AtomicTrie()
+			atomicTrie3 := atomicBackend3.AtomicTrie()
 
-			rootHash2, commitHeight2 := atomicTrie2.LastCommitted()
-			assert.EqualValues(t, commitHeight1, commitHeight2)
-			assert.EqualValues(t, rootHash1, rootHash2)
+			rootHash3, commitHeight3 := atomicTrie3.LastCommitted()
+			assert.EqualValues(t, commitHeight1, commitHeight3)
+			assert.EqualValues(t, rootHash1, rootHash3)
 
 			// We now index additional operations up the next commit interval in order to confirm that nothing
 			// during the initialization phase will cause an invalid root when indexing continues.
@@ -205,17 +213,17 @@ func TestAtomicTrieInitialize(t *testing.T) {
 			verifyOperations(t, atomicTrie1, codec, updatedRoot, 1, updatedLastCommitHeight, operationsMap)
 
 			// Generate a new atomic trie to compare the root against.
-			atomicBackend3, err := NewAtomicBackend(
+			atomicBackend4, err := NewAtomicBackend(
 				versiondb.New(memdb.New()), testSharedMemory(), nil, repo, nextCommitHeight, common.Hash{}, test.commitInterval,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			atomicTrie3 := atomicBackend3.AtomicTrie()
+			atomicTrie4 := atomicBackend4.AtomicTrie()
 
-			rootHash3, commitHeight3 := atomicTrie3.LastCommitted()
-			assert.EqualValues(t, updatedRoot, rootHash3)
-			assert.EqualValues(t, updatedLastCommitHeight, commitHeight3)
+			rootHash4, commitHeight4 := atomicTrie4.LastCommitted()
+			assert.EqualValues(t, updatedRoot, rootHash4)
+			assert.EqualValues(t, updatedLastCommitHeight, commitHeight4)
 		})
 	}
 }

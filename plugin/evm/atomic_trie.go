@@ -147,8 +147,7 @@ func newAtomicTrie(
 	trieDB := trie.NewDatabaseWithConfig(
 		Database{atomicTrieDB},
 		&trie.Config{
-			Cache:     64,    // Allocate 64MB of memory for clean cache
-			Preimages: false, // Keys are not hashed, so there is no need for preimages
+			Cache: 64, // Allocate 64MB of memory for clean cache
 		},
 	)
 
