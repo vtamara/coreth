@@ -19,7 +19,6 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
-	"github.com/ava-labs/coreth/trie"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -34,25 +33,26 @@ func (tx *Tx) mustAtomicOps() map[ids.ID]*atomic.Requests {
 	return map[ids.ID]*atomic.Requests{id: reqs}
 }
 
-// index updates the trie with entries in atomicOps
-// This function updates the following:
-// - heightBytes => trie root hash (if the trie was committed)
-// - lastCommittedBlock => height (if the trie was committed)
-func (a *atomicTrie) index(tr *trie.Trie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
-	if err := a.UpdateTrie(tr, height, atomicOps); err != nil {
-		return err
-	}
-
-	if height%a.commitInterval != 0 {
-		return nil
-	}
-
-	root, _, err := tr.Commit(nil, false)
+// indexAtomicTxs updates [tr] with entries in [atomicOps] at height by creating
+// a new snapshot, calculating a new root and calling InsertTrie followed
+// by AcceptTrie on the new root.
+func indexAtomicTxs(tr AtomicTrie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
+	snapshot, err := tr.OpenTrie(tr.LastAcceptedRoot())
 	if err != nil {
 		return err
 	}
-
-	return a.commit(height, root)
+	if err := tr.UpdateTrie(snapshot, height, atomicOps); err != nil {
+		return err
+	}
+	root, _, err := snapshot.Commit(nil, false)
+	if err != nil {
+		return err
+	}
+	if err := tr.InsertTrie(root); err != nil {
+		return err
+	}
+	_, err = tr.AcceptTrie(height, root)
+	return err
 }
 
 func TestNearestCommitHeight(t *testing.T) {
@@ -186,10 +186,6 @@ func TestAtomicTrieInitialize(t *testing.T) {
 			// We now index additional operations up the next commit interval in order to confirm that nothing
 			// during the initialization phase will cause an invalid root when indexing continues.
 			nextCommitHeight := nearestCommitHeight(test.lastAcceptedHeight+test.commitInterval, test.commitInterval)
-			snapshot, err := atomicTrie1.OpenTrie(atomicTrie1.LastAcceptedRoot())
-			if err != nil {
-				t.Fatal(err)
-			}
 			for i := test.lastAcceptedHeight + 1; i <= nextCommitHeight; i++ {
 				txs := newTestTxs(test.numTxsPerBlock(i))
 				if err := repo.Write(i, txs); err != nil {
@@ -200,7 +196,7 @@ func TestAtomicTrieInitialize(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := atomicTrie1.(*atomicTrie).index(snapshot, i, atomicOps); err != nil {
+				if err := indexAtomicTxs(atomicTrie1, i, atomicOps); err != nil {
 					t.Fatal(err)
 				}
 				operationsMap[i] = atomicOps
@@ -263,7 +259,7 @@ func TestIndexerInitializesOnlyOnce(t *testing.T) {
 	assert.Equal(t, hash, newHash, "hash should be the same")
 }
 
-func newTestAtomicTrieIndexer(t *testing.T) (*atomicTrie, *trie.Trie) {
+func newTestAtomicTrie(t *testing.T) AtomicTrie {
 	db := versiondb.New(memdb.New())
 	repo, err := NewAtomicTxRepository(db, testTxCodec(), 0, nil, nil, nil)
 	if err != nil {
@@ -273,18 +269,11 @@ func newTestAtomicTrieIndexer(t *testing.T) (*atomicTrie, *trie.Trie) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	indexer := atomicBackend.AtomicTrie()
-
-	assert.NotNil(t, indexer)
-	snapshot, err := indexer.OpenTrie(indexer.LastAcceptedRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return indexer.(*atomicTrie), snapshot
+	return atomicBackend.AtomicTrie()
 }
 
 func TestIndexerWriteAndRead(t *testing.T) {
-	atomicTrie, snapshot := newTestAtomicTrieIndexer(t)
+	atomicTrie := newTestAtomicTrie(t)
 
 	blockRootMap := make(map[uint64]common.Hash)
 	lastCommittedBlockHeight := uint64(0)
@@ -293,7 +282,7 @@ func TestIndexerWriteAndRead(t *testing.T) {
 	// process 305 blocks so that we get three commits (100, 200, 300)
 	for height := uint64(1); height <= testCommitInterval*3+5; /*=305*/ height++ {
 		atomicRequests := testDataImportTx().mustAtomicOps()
-		err := atomicTrie.index(snapshot, height, atomicRequests)
+		err := indexAtomicTxs(atomicTrie, height, atomicRequests)
 		assert.NoError(t, err)
 		if height%testCommitInterval == 0 {
 			lastCommittedBlockHash, lastCommittedBlockHeight = atomicTrie.LastCommitted()
@@ -319,8 +308,8 @@ func TestIndexerWriteAndRead(t *testing.T) {
 }
 
 func TestAtomicOpsAreNotTxOrderDependent(t *testing.T) {
-	atomicTrie1, snapshot1 := newTestAtomicTrieIndexer(t)
-	atomicTrie2, snapshot2 := newTestAtomicTrieIndexer(t)
+	atomicTrie1 := newTestAtomicTrie(t)
+	atomicTrie2 := newTestAtomicTrie(t)
 
 	for height := uint64(0); height <= testCommitInterval; /*=205*/ height++ {
 		tx1 := testDataImportTx()
@@ -330,9 +319,9 @@ func TestAtomicOpsAreNotTxOrderDependent(t *testing.T) {
 		atomicRequests2, err := mergeAtomicOps([]*Tx{tx2, tx1})
 		assert.NoError(t, err)
 
-		err = atomicTrie1.index(snapshot1, height, atomicRequests1)
+		err = indexAtomicTxs(atomicTrie1, height, atomicRequests1)
 		assert.NoError(t, err)
-		err = atomicTrie2.index(snapshot2, height, atomicRequests2)
+		err = indexAtomicTxs(atomicTrie2, height, atomicRequests2)
 		assert.NoError(t, err)
 	}
 	root1, height1 := atomicTrie1.LastCommitted()
@@ -388,10 +377,10 @@ func TestIndexingNilShouldNotImpactTrie(t *testing.T) {
 	}
 
 	// without nils
-	a1, snapshot1 := newTestAtomicTrieIndexer(t)
+	a1 := newTestAtomicTrie(t)
 	for i := uint64(0); i <= testCommitInterval; i++ {
 		if i%2 == 0 {
-			if err := a1.index(snapshot1, i, ops[i]); err != nil {
+			if err := indexAtomicTxs(a1, i, ops[i]); err != nil {
 				t.Fatal(err)
 			}
 		} else {
@@ -404,14 +393,14 @@ func TestIndexingNilShouldNotImpactTrie(t *testing.T) {
 	assert.Equal(t, uint64(testCommitInterval), height1)
 
 	// with nils
-	a2, snapshot2 := newTestAtomicTrieIndexer(t)
+	a2 := newTestAtomicTrie(t)
 	for i := uint64(0); i <= testCommitInterval; i++ {
 		if i%2 == 0 {
-			if err := a2.index(snapshot2, i, ops[i]); err != nil {
+			if err := indexAtomicTxs(a2, i, ops[i]); err != nil {
 				t.Fatal(err)
 			}
 		} else {
-			if err := a2.index(snapshot2, i, nil); err != nil {
+			if err := indexAtomicTxs(a2, i, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -719,17 +708,11 @@ func benchmarkApplyToSharedMemory(b *testing.B, disk database.Database, blocks u
 		b.Fatal(err)
 	}
 	trie := backend.AtomicTrie()
-	lastCommittedRoot, _ := trie.LastCommitted()
-	snapshot, err := trie.OpenTrie(lastCommittedRoot)
-	if err != nil {
-		b.Fatal(err)
-	}
-
 	for height := uint64(1); height <= lastAcceptedHeight; height++ {
 		txs := newTestTxs(constTxsPerHeight(3)(height))
 		ops, err := mergeAtomicOps(txs)
 		assert.NoError(b, err)
-		assert.NoError(b, trie.(*atomicTrie).index(snapshot, height, ops))
+		assert.NoError(b, indexAtomicTxs(trie, height, ops))
 	}
 
 	hash, height := trie.LastCommitted()
