@@ -34,7 +34,7 @@ func (tx *Tx) mustAtomicOps() map[ids.ID]*atomic.Requests {
 }
 
 // indexAtomicTxs updates [tr] with entries in [atomicOps] at height by creating
-// a new snapshot, calculating a new root and calling InsertTrie followed
+// a new snapshot, calculating a new root, and calling InsertTrie followed
 // by AcceptTrie on the new root.
 func indexAtomicTxs(tr AtomicTrie, height uint64, atomicOps map[ids.ID]*atomic.Requests) error {
 	snapshot, err := tr.OpenTrie(tr.LastAcceptedRoot())
