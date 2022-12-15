@@ -4,7 +4,6 @@
 package evm
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -84,7 +83,7 @@ func (utx *UnsignedExportTx) Verify(
 	if rules.IsApricotPhase5 {
 		// Note that SameSubnet verifies that [tx.DestinationChain] isn't this
 		// chain's ID
-		if err := verify.SameSubnet(context.TODO(), ctx, utx.DestinationChain); err != nil {
+		if err := verify.SameSubnet(ctx, utx.DestinationChain); err != nil {
 			return errWrongChainID
 		}
 	} else {
