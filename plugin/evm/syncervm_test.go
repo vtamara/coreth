@@ -49,7 +49,7 @@ func TestSkipStateSync(t *testing.T) {
 	test := syncTest{
 		syncableInterval:   256,
 		stateSyncMinBlocks: 300, // must be greater than [syncableInterval] to skip sync
-		syncMode:           block.StateSummaryNotRunning,
+		syncMode:           block.StateSummaryStopped,
 	}
 	vmSetup := createSyncServerAndClientVMs(t, test)
 	defer vmSetup.Teardown(t)
@@ -62,7 +62,7 @@ func TestStateSyncFromScratch(t *testing.T) {
 	test := syncTest{
 		syncableInterval:   256,
 		stateSyncMinBlocks: 50, // must be less than [syncableInterval] to perform sync
-		syncMode:           block.StateSummaryBlocking,
+		syncMode:           block.StateSummaryStatic,
 	}
 	vmSetup := createSyncServerAndClientVMs(t, test)
 	defer vmSetup.Teardown(t)
@@ -83,7 +83,7 @@ func TestStateSyncToggleEnabledToDisabled(t *testing.T) {
 	test := syncTest{
 		syncableInterval:   256,
 		stateSyncMinBlocks: 50, // must be less than [syncableInterval] to perform sync
-		syncMode:           block.StateSummaryBlocking,
+		syncMode:           block.StateSummaryStatic,
 		responseIntercept: func(syncerVM *VM, nodeID ids.NodeID, requestID uint32, response []byte) {
 			lock.Lock()
 			defer lock.Unlock()
@@ -112,7 +112,7 @@ func TestStateSyncToggleEnabledToDisabled(t *testing.T) {
 	// Perform sync resulting in early termination.
 	testSyncerVM(t, vmSetup, test)
 
-	test.syncMode = block.StateSummaryBlocking
+	test.syncMode = block.StateSummaryStatic
 	test.responseIntercept = nil
 	test.expectedErr = nil
 
@@ -477,7 +477,7 @@ func testSyncerVM(t *testing.T, vmSetup *syncVMSetup, test syncTest) {
 	if syncMode != test.syncMode {
 		t.Fatal("unexpected value returned from accept", "expected", test.syncMode, "got", syncMode)
 	}
-	if syncMode == block.StateSummaryNotRunning {
+	if syncMode == block.StateSummaryStopped {
 		return
 	}
 	msg := <-syncerEngineChan

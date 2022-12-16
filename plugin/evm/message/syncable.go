@@ -87,7 +87,7 @@ func (s SyncSummary) String() string {
 
 func (s SyncSummary) Accept(context.Context) (block.StateSummaryMode, error) {
 	if s.acceptImpl == nil {
-		return block.StateSummaryNotRunning, fmt.Errorf("accept implementation not specified for summary: %s", s)
+		return block.StateSummaryStopped, fmt.Errorf("accept implementation not specified for summary: %s", s)
 	}
 	return s.acceptImpl(s)
 }
