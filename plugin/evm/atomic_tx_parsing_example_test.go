@@ -3,6 +3,8 @@ package evm
 import (
 	"testing"
 
+	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/hashing"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +21,7 @@ func TestXxx(t *testing.T) {
 		// These are the bytes that are hashed to get the tx ID
 		txBytes := tx.SignedBytes()
 		t.Logf("%d: %s", len(txBytes), common.Bytes2Hex(txBytes))
+		require.Equal(t, tx.ID(), ids.ID(hashing.ComputeHash256Array(txBytes)))
 
 		switch tx.UnsignedAtomicTx.(type) {
 		case *UnsignedImportTx:
