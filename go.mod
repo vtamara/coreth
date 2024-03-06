@@ -48,6 +48,10 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
+replace github.com/ava-labs/avalanchego v1.10.18-rc.17 => github.com/vtamara/avalanchego v1.10.18rc.17adJ74
+
+replace github.com/cockroachdb/pebble v0.0.0-20230209160836-829675f94811 => github.com/vtamara/pebble v0.0.0-20240304195718-33499868d65e
+
 require (
 	github.com/DataDog/zstd v1.5.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
