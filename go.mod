@@ -142,7 +142,6 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
+replace github.com/ava-labs/avalanchego v1.10.10 => github.com/vtamara/avalanchego v1.10.11-0.20240306025416-dcf015605776
 
-replace github.com/ava-labs/avalanchego v1.10.10 => github.com/vtamara/avalanchego v1.10.10adJ
 replace github.com/cockroachdb/pebble v0.0.0-20230209160836-829675f94811 => github.com/vtamara/pebble v0.0.0-20240304195718-33499868d65e
-
