@@ -46,6 +46,10 @@ require (
 	golang.org/x/time v0.0.0-20220922220347-f3bd1da661af
 )
 
+replace github.com/ava-labs/avalanchego v1.10.5-rc.1 => github.com/vtamara/avalanchego v1.10.6-0.20240306150823-f3d8287989a2
+
+replace github.com/cockroachdb/pebble v0.0.0-20230209160836-829675f94811 => github.com/vtamara/pebble v0.0.0-20240304195718-33499868d65e
+
 require (
 	github.com/DataDog/zstd v1.5.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
