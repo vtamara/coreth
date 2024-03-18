@@ -147,4 +147,4 @@ replace github.com/cockroachdb/pebble v0.0.0-20230209160836-829675f94811 => gith
 
 replace github.com/ava-labs/avalanchego v1.11.0-rc.1.0.20240207163634-e248179ae759 => github.com/vtamara/avalanchego v1.11.1-0.20240305215814-31a8e076f867
 
-replace github.com/supranational/blst v0.3.11 => github.com/dot-asm/blst v0.1.1-0.20240309172718-1e1fab113d0e
+replace github.com/supranational/blst v0.3.11 => github.com/supranational/blst main
